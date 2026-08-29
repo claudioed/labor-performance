@@ -1,8 +1,17 @@
 name: OpenSSF Scorecard
 
 on:
+  # Scorecard's action itself refuses to run on push events targeting
+  # anything but the repo's actual GitHub-configured default branch
+  # ("only default branch is supported") -- and this fleet deliberately
+  # keeps `develop` as every repo's default branch (GitFlow), not `main`.
+  # Triggering on `main` here was a latent, fleet-wide copy-paste bug:
+  # confirmed via a real failed run ("refs/heads/main not supported with
+  # push event") the first time any repo's Scorecard workflow actually
+  # fired, since the schedule/workflow_dispatch triggers never surfaced
+  # this branch mismatch before.
   push:
-    branches: [main]
+    branches: [develop]
   schedule:
     # Scorecard measures repo-level supply-chain hygiene (branch protection,
     # signed commits, dependency pinning, etc.) — a weekly cadence is the
