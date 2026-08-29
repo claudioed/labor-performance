@@ -260,9 +260,16 @@ curl -s localhost:8080/standards/PICK
 curl -s localhost:8080/associates/assoc-1/scorecard
 # 200 OK:
 # {"associateId":"assoc-1","taskCount":3,"meanEfficiencyPct":91.2,
-#  "byTaskType":{"PICK":{"taskCount":3,"meanEfficiencyPct":91.2}}}
+#  "byTaskType":{"PICK":{"taskCount":3,"meanEfficiencyPct":91.2}},
+#  "trend":"STABLE","coachingFlag":false}
 # 404 application/problem+json if this service has never seen assoc-1
 ```
+
+`trend` (`IMPROVING`/`DECLINING`/`STABLE`/`INSUFFICIENT_DATA`) and
+`coachingFlag` are computed from the associate's most recent (up to 10)
+scored tasks — see [ADR 0005](docs/docs/adr/0005-associate-trend-and-coaching-flag.md)
+for the full design. Visibility only: this service never automates
+coaching, pay, or task-claim decisions from either field.
 
 **GetTaskTypePerformance** (fleet-wide, all associates):
 
@@ -354,9 +361,13 @@ someone forgot about.
 - **Automatic pay-for-performance / bonus calculation.** A real Manhattan
   competitor feature, explicitly out of scope — this context surfaces the
   number, a human/other system decides what to do with it.
-- **Gamification, coaching workflows, real-time digital communication to
-  associates.** Real Manhattan/Blue Yonder features, explicitly out of
-  scope for v1 — this is the foundational data model only.
+- **Gamification, automated coaching workflows, real-time digital
+  communication to associates.** Real Manhattan/Blue Yonder features,
+  explicitly out of scope for v1 — v1 (this PR, ADR 0005) ships the
+  passive visibility signal only (`Trend`/`CoachingFlag` on the
+  Scorecard read model, a human reads it); an active workflow that
+  automatically messages, schedules, or nudges an associate based on
+  that signal remains deferred.
 - **Publishing `LaborStandardDefined`/`LaborStandardRevised`/
   `TaskPerformanceRecorded` to Kafka for other services to consume.** Log
   publisher only, no integration contract yet — no other repo needs these

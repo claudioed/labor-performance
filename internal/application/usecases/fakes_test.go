@@ -56,10 +56,12 @@ func (f *failingStandardRepo) NextID(ctx context.Context) (shared.StandardId, er
 }
 
 // failingPerformanceRepo wraps a real ports.PerformanceRepo and can be
-// told to fail Save, to exercise RecordTaskPerformance's error path.
+// told to fail Save or RecentByAssociateID, to exercise
+// RecordTaskPerformance's and GetAssociateScorecard's error paths.
 type failingPerformanceRepo struct {
 	ports.PerformanceRepo
-	failSave bool
+	failSave   bool
+	failRecent bool
 }
 
 func (f *failingPerformanceRepo) Save(ctx context.Context, p *performance.TaskPerformance) error {
@@ -67,6 +69,13 @@ func (f *failingPerformanceRepo) Save(ctx context.Context, p *performance.TaskPe
 		return errUnmapped
 	}
 	return f.PerformanceRepo.Save(ctx, p)
+}
+
+func (f *failingPerformanceRepo) RecentByAssociateID(ctx context.Context, associateId shared.AssociateId, limit int) ([]*performance.TaskPerformance, error) {
+	if f.failRecent {
+		return nil, errUnmapped
+	}
+	return f.PerformanceRepo.RecentByAssociateID(ctx, associateId, limit)
 }
 
 // failingPublisher can be told to fail Publish, to exercise a use case's
