@@ -1,0 +1,121 @@
+# Default values for labor-performance.
+
+replicaCount: 1
+
+image:
+  repository: labor-performance
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: ["ALL"]
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: labor-performance.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+# deployment.environment.name on every span, metric and log this service
+# exports. Set per-cluster (local / staging / production).
+environment: "local"
+
+# Falls back to in-memory adapters when database.url / database.existingSecret
+# are left empty, same as running the binary locally with no env vars set.
+# This service is a Kafka CONSUMER (not just a publisher, unlike
+# inventory-storage) — kafka.enabled gates whether KAFKA_BROKERS is set at
+# all; the consumer group id is fixed via config.kafkaConsumerGroup.
+config:
+  httpAddr: ":8080"
+  migrationsPath: "migrations"
+  logLevel: "info"        # debug | info | warn | error
+  kafkaConsumerGroup: "labor-performance"
+  corsAllowedOrigins: "http://localhost:5173,http://localhost:5187"
+
+database:
+  url: ""
+  existingSecret: ""
+  existingSecretKey: "DATABASE_URL"
+
+# This service consumes warehouse.fulfillment.events (fulfillment-execution's
+# TaskCompleted). kafka.enabled gates whether KAFKA_BROKERS is set in the
+# container env at all — without it, the consumer goroutine still starts
+# (matching the binary's own local-dev behavior) but can never reach a
+# broker, so the deployment is functionally REST-only until kafka.enabled
+# is true.
+kafka:
+  enabled: false
+  brokers: "kafka:9092"
+
+# OpenTelemetry traces + metrics, pushed over OTLP/gRPC to a Collector. The
+# endpoint below is the in-cluster Collector Service in the warehouse-infra
+# kind cluster. Export is non-blocking, so a Collector that is down costs
+# telemetry and nothing else — but otel.enabled=false skips the env entirely.
+otel:
+  enabled: true
+  endpoint: "otel-collector.observability.svc.cluster.local:4317"
+  serviceName: "labor-performance"
+
+extraEnv: []
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 5
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

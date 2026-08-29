@@ -1,0 +1,71 @@
+---
+id: get-associate-scorecard
+title: "Get one associate's performance scorecard"
+description: "404 only when this service has never recorded a single TaskPerformance row for this associate. An associate with 1+ rows but an all-nil efficiency still returns 200 with meanEfficiencyPct: null."
+sidebar_label: "Get one associate's performance scorecard"
+hide_title: true
+hide_table_of_contents: true
+api: eJzdVs1uGzcQfpXBXOIga0kJDMTYnlxXTY2mgeCovbg6jMiRljGX3HC4sgVhgTxEn7BPUnC1klaRkt566Gl/yOH8fN98ww1GWgrmD1hxWPhQklOMswx9xYGi8e5OY45LjjciXhmK/FH5wIqCxgw1iwqmSvswx6vRFXhn1/BUsINYGAHhsDKKoSABxysOEFj5oFkDgRi3tAxTksfJwTsE/wQLH7YH0M7tAG7c4QueTCzg9au0WWBeRyAHZO2lMxZ4sTDKsFNrkGishcCxDk7gzWi0NSyZ3Hi/a6JiDq62dvCnwwwrClRy5JDqskFHJWOOe9d3KXGT8q0oFphh4M+1Cawxj6HmDEUVXBLmG4zrKplKDMYtsWlmabNU3glLWn8zGqXHcRWnBR/yfCEgvXor7yK7mIyoqqxRLUTDT5IsN6ee/fwTq5hyCgnQaLZ++7mchplhJHm89fXWUbdqXOQlh7R8Ur3eNleXcw6YYQtnxBy1r+eWMcNUYUqvbZ2aDOfrBP20NTwNmbQ2KTuyk6Pgv5/afxJ6KpGJ6RN3GfwYmB61f3LY9JcPzdK0/69GV6eIf/CQwoaq3wS7NjnthG/zoAp+brl89e98OA7g/udbeHs9eguT7QHwE0cyVlrnv0ynE7iZ3MngtNjH0HUE6hWwDgYP1TjDNIkUazmPlW6DOGtmnMRWqc40Wb8hH7aruwj2/vaHzw5Qdbl3qbd4tYSJhe8ksNWGWGCOwz0YMtz0uqkZ9rs1id9ORepgMccixiofDq1XZAsvMb8eXY9O4HiflkHziq2vyoRzUg7jFr7Nt4v3Pc19gL5w3kzuTs4au6VxzIE12NYgFU5T0AIX/FyxiqwhmpIT+2DH5pdATgOpWJO9XMnlzuiIoilV45YtSZQvK8vprEVtF8baFPYlP7OqUyAtv2UA0/5M0LwwjqUXUXIamLT0/RxKKj+AifBh/Mf4HkgprqIAnYyPp2Aig0+z5n78cQp/f/kLYkERjAA/K1uLWbFdgw5mxQ7ma4gFg3FzXzsNv9LikUB5J3XJAfzifEIvpPV7u0+bV+wiXAgzUGVkSLJ2iiozWFNpX24HSyLDFpXXg9Eg4W6NYictjbsx89vdNBE8NTht1albOIV7ylRi1mOW5MPh0sSing+UL4fKUq2NZz1skb/sT/hE7cpLLMn1fLzjCN4dj5+vET87+jcHRfq/3AI6WYn8HIeVJeMSLG2tN50KPBzmaFKU/PiGcKjVLMPU68lgs5mT8O/BNk36/bnmsMb8YZbhioLZTpiHDWoj6V1jviAr/J1iX9x3WvcSvhVz95PcOlGQbJ2+MMNHXn91rWlmTYYFk+bQhrHdcdN2Ws/25OaR1Gmvk+/GU2yafwByRaIU
+sidebar_class_name: "get api-method"
+info_path: docs/api-reference/rest/labor-performance-api
+custom_edit_url: null
+hide_send_button: true
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Get one associate's performance scorecard"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/associates/{associateId}/scorecard"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+404 only when this service has never recorded a single TaskPerformance row for this associate. An associate with 1+ rows but an all-nil efficiency still returns 200 with meanEfficiencyPct: null.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./get-associate-scorecard.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-associate-scorecard.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-associate-scorecard.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

@@ -1,0 +1,37 @@
+# .gremlins.yaml — mutation-testing configuration for labor-performance.
+#
+# gremlins (github.com/go-gremlins/gremlins, pinned to v0.6.0 in CI) reads this
+# file automatically from the Go module root, so the `mutation-fast` CI job, the
+# scheduled exhaustive `mutation` CI job and the local `make mutation` /
+# `make mutation-full` targets all run with identical settings.
+#
+# Mutation testing is the sensor that tells us whether the tests actually
+# ASSERT rather than merely execute. The thresholds below turn it into a
+# blocking quality gate instead of a report.
+silent: false
+
+unleash:
+  # A single worker with a generous timeout coefficient. The defaults produced
+  # spurious TIMED OUT results on this module (mutants finish in tens of
+  # milliseconds — the "timeouts" were parallel workers contending over the
+  # build cache, not slow tests), exactly the same failure mode
+  # inventory-storage's own .gremlins.yaml documents.
+  workers: 1
+  timeout-coefficient: 30
+
+  threshold:
+    # NOTE: gremlins fails when the measured value is <= the threshold
+    # (internal/report/report.go), so a threshold must sit strictly BELOW the
+    # number we can meet today. Measured on 2026-08-29 (this fleet-parity PR,
+    # this service's first-ever mutation-testing run): efficacy 100.00% and
+    # mutator coverage 100.00% on both ./internal/domain/performance (the
+    # fast blocking subset — the TaskPerformance aggregate: idempotency-
+    # adjacent invariants, the never-divide-by-zero EfficiencyPct
+    # computation, and immutability) and the exhaustive ./internal/domain
+    # run (11 mutants total: 8 in performance, 3 in standard — all killed,
+    # zero survivors, zero not-covered). 99 therefore locks in today's
+    # quality and fails the build the moment a single mutant survives — the
+    # same "gate just under what we already achieve" approach as the 90%
+    # coverage gate in ci.yml and as inventory-storage's own .gremlins.yaml.
+    efficacy: 99
+    mutant-coverage: 99

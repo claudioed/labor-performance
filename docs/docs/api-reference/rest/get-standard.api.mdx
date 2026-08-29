@@ -1,0 +1,71 @@
+---
+id: get-standard
+title: "Get the currently-active labor standard for a TaskType"
+description: "Returns the LaborStandard whose effective range currently covers 'now' for this TaskType (EffectiveTo is null), or a 404 if none does."
+sidebar_label: "Get the currently-active labor standard for a TaskType"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVs1u4zYQfpXBXJqgsuUWbjdQT0Hq3QabLIzE20viA02NLG4oUktSjg1DQB+iT9gnKUayZSV20J6KPfTkRCTn55tvvpktBrH0mDygD8KkwqUe5xHakpwIyprrFBNcUrjfnWKEKXnpVMmnmOAdhcoZDyEnuBEL6/Y34Tm3noCyjGRQKwInzJJAVs6RCXoD0q7IeXhEY58fETLrIOTKw0z4p9mmJDib7N/OLCgPptL6PALrQMB4NAaVgbGGILXkh48GIyyFEwUFcpzRFo0oCBMMO4MYoeKQSxFyjNDR10o5SjEJrqIIvcypEJhsMfDlBH1wyiwxQjJVwRBNr68+YoTTy+bn/ubylrF6icetcs46D1mlM6V1QSYMaE2y4vPvPHAwwyY9tgq0FjLozRAjDCpodrvPH+t6zlH60hpPngP7cTTin5ceZ3kP1YFowfaHeklrApnAD0VZaiWbwsZfPL/eHqdtF19IBkbTMQ2Can13KH5DAEVI65JkoPSepDWp7wWnTKAlOYwws64Qof3085jDXYuiZFPjn9jEnmXvnS1OZde9T0WgQVBF6/lAzn/5KEJmsFiw55ZyL5GZOvJkAlijN2ANCPBVSc5TSimcSW09peddZYdY1wdMuv6sa/48PkWUz+bJ2GfTIAyhbYg3yFE6u9BUfP/PJHmlBu+v4N3F6B1MWwPwKwWhtG+6+7fZbAqX02s/PCbXG8TqUKycwkO6ry/WEctXqE7Vv+YYOYiTz5RhPOUpm3VfIh5wB1gbQeevMz4/1GKX+y71riLj44p8svCqXw8y+H+V/vMq1REWFHK7m3nNQAk5Jhh3wzHe7nWwZvPkVvthUzmNCeYhlEkcayuFzq0PycXoYnRUgBs+hpRWpG3JCogs9cpkrZTsImzGKUzJNfgaSVyWI1sTs1SGyFEKunnQxQpne3UE1h8oyXXD9RyESZl8ldCDlR90/Ct77ry0DHJDC2lZMtnWSeFu6OqHMGPqMixKEqSUKUO+FxE7dSRS3/cTsx+SfOEXUAE+TX6f3IGQksrgQTQx91F4dioQ8PYAd5P7Gfz1x58QchF4R6C11JVXK9IbSJ1akYHFpllOlFnYyqTwUWRPAqQ1virIgc3enETs96pLm1aszWeeCESpfCz8xkhRquFGFPq83T+YDG1VfhiOhlx3rSQZ3xB3t43cXs+Y0tzSQobewXG5ZyQKjHrM8kkcL1XIq8VQ2iKWWlSpspTGTeUHPUybxiitD4UwPR8fKDRgHO0LL6nTVFx0ZHnNue1BkL6t/W+nDYHWIS61UIaRbuDb7lq5v+dGmHRLzTxCble+sN0uhKfPTtc1f/5akdtg8jCPcCWcasf3wxZT5fnvFJNMaP96mPchOrvbCdQ5vBXj7qMwG2aR0BX/hxE+0aa/wNbzOsKcREquiaE9vmw6pffwaM1jdemU7cNkhnX9N3c1J4s=
+sidebar_class_name: "get api-method"
+info_path: docs/api-reference/rest/labor-performance-api
+custom_edit_url: null
+hide_send_button: true
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Get the currently-active labor standard for a TaskType"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/standards/{taskType}"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Returns the LaborStandard whose effective range currently covers "now" for this TaskType (EffectiveTo is null), or a 404 if none does.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./get-standard.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-standard.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-standard.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

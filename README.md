@@ -10,10 +10,12 @@
 
 Engineered labor standards ("a PICK should take 45s") and
 actual-vs-standard performance scoring ("this associate's last PICK took
-52s — 87% of standard") for the `warehouse-systems` fleet — the seventh
+52s — 87% of standard") for the `warehouse-systems` fleet — the eighth
 bounded-context Go service in this fleet, after `order-management`,
 `inventory-storage`, `wes-work-planning`, `workforce-management`,
-`fulfillment-execution`, and `facility-layout`.
+`fulfillment-execution`, `facility-layout`, and `warehouse-ops-agent`.
+
+📚 **Full documentation site:** https://claudioed.github.io/labor-performance/
 
 ## Why this context exists
 
@@ -138,7 +140,32 @@ export DATABASE_URL='postgres://labor:***@localhost:5435/labor?sslmode=disable'
 go run ./cmd/labor                     # migrations run automatically at startup
 ```
 
-### 3. Kafka consumer smoke test against the shared broker
+### 3. With Docker
+
+A working `Dockerfile` builds a scratch-minimal, non-root image:
+
+```bash
+docker build -t labor-performance:local .
+docker run --rm -p 8080:8080 \
+  -e DATABASE_URL='postgres://labor:***@host.docker.internal:5435/labor?sslmode=disable' \
+  labor-performance:local
+curl -s localhost:8080/healthz
+```
+
+### 4. With Helm (kind / any Kubernetes cluster)
+
+```bash
+helm install labor-performance charts/labor-performance \
+  --set database.url='postgres://labor:***@postgres:5432/labor?sslmode=disable'
+kubectl port-forward svc/labor-performance 8080:80
+curl -s localhost:8080/healthz
+```
+
+See `charts/labor-performance/values.yaml` for the full configuration
+surface (`kafka.enabled`, `otel.enabled`, ingress, autoscaling, an
+`existingSecret` pattern for `DATABASE_URL`).
+
+### 5. Kafka consumer smoke test against the shared broker
 
 ```bash
 # From the workspace root, start the fleet's shared Kafka broker:
@@ -265,6 +292,19 @@ make check-all   # check + coverage (gate: 90% on domain + application)
 | `coverage` | coverage profile + the 90% gate |
 | `integration-kafka` | Build-tagged consumer test against a real broker (`KAFKA_BROKERS` required) |
 
+Additional verification surfaces, each with its own CI job:
+
+```bash
+go test ./... -run TestFeatures -v                  # BDD (godog/Gherkin)
+go test ./internal/architecture/... -v               # arch-fitness (arch-go)
+go test -tags=integration ./... -race -count=1       # Postgres + Kafka integration
+gremlins unleash ./internal/domain                    # mutation testing (see .gremlins.yaml)
+ct lint --charts charts/labor-performance \
+  --validate-maintainers=false --check-version-increment=false
+spectral lint apis/openapi.yaml --ruleset .spectral.yaml --fail-severity=warn
+spectral lint apis/asyncapi.yaml --ruleset .spectral.asyncapi.yaml --fail-severity=warn
+```
+
 Git hooks are wired through [lefthook](https://github.com/evilmartians/lefthook)
 — `pre-commit` runs fmt-check/vet/lint, `pre-push` runs `make check`. Hooks
 are not tracked by git, so activate them once per clone:
@@ -274,10 +314,18 @@ brew install lefthook   # or: go install github.com/evilmartians/lefthook@latest
 lefthook install
 ```
 
-CI runs three jobs in v1: **`lint`**, **`test`**, and **`vuln`**
-(govulncheck) — added from day one since this is a brand-new service with
-fresh dependencies (`kafka-go`, `pgx`) worth scanning immediately, unlike
-`order-management` v1 which deferred it.
+CI (`.github/workflows/ci.yml`) runs the full fleet-standard matrix:
+**`lint`**, **`test`**, **`bdd`**, **`integration`** (Postgres service
+container), **`mutation-fast`** (blocking, `./internal/domain/performance`)
+and **`mutation`** (exhaustive, scheduled/manual, `./internal/domain`),
+**`api-lint`** (Spectral against both `apis/openapi.yaml` and
+`apis/asyncapi.yaml`), **`vuln`** (govulncheck), **`helm-lint`**
+(`ct lint`), **`arch-test`** (arch-go fitness tests), **`trivy-scan`**
+(container CVE gate on every push/PR), **`docker-publish`** (main-only,
+cosign keyless signing + SPDX SBOM attestation), and **`release`**
+(main-only, auto-tagged GitHub release + published Helm chart). Plus
+`.github/workflows/codeql.yml` (security-extended CodeQL analysis) and
+`.github/workflows/scorecard.yml` (OpenSSF Scorecard).
 
 ## Known gaps
 
@@ -295,9 +343,9 @@ fresh dependencies (`kafka-go`, `pgx`) worth scanning immediately, unlike
 
 ## Deferred (v1)
 
-The following are **deliberately out of scope for this first pass**. They
-are listed so an absence is never mistaken for an oversight — each is a
-decision, not a gap someone forgot about.
+The following are **deliberately out of scope**. They are listed so an
+absence is never mistaken for an oversight — each is a decision, not a gap
+someone forgot about.
 
 - **`labor-mfe` micro-frontend remote.** CORS is added now (proactively,
   matching the fleet's convention that CORS ships alongside a service's
@@ -314,41 +362,43 @@ decision, not a gap someone forgot about.
   publisher only, no integration contract yet — no other repo needs these
   events today. `apis/asyncapi.yaml` documents only what this service
   CONSUMES, not what it would publish.
-- **Helm chart / `warehouse-infra` kind-cluster wiring.** No `charts/`
-  directory and no `helm-lint` CI job.
-- **Gremlins mutation-testing gate.** No `.gremlins.yaml` and no
-  `mutation` job. The 90% coverage gate is the only test-quality sensor in
-  v1.
-- **godog / BDD acceptance tests.** No `features/` directory and no `bdd`
-  job. The behavioral rules are covered by table-driven unit tests and the
-  `httptest` suite instead.
 - **MCP inbound adapter.** HTTP and Kafka are the only inbound adapters.
 - **Per-service analytics data-mesh** (a separate analytics topic,
   analytical Postgres, and projector/reports binaries, as several sibling
   services now have). This service's OLTP write path already IS the
   analytics-relevant signal (`TaskPerformance` rows); a dedicated
   analytics side-projection is a natural but deferred fast-follow.
-- **Postgres integration tests.** The `postgres` adapter has no
-  `-tags=integration` suite and there is no `integration` CI job — the
-  Kafka consumer's integration surface is real-broker-tested instead (see
-  `make integration-kafka`), since that is this service's actual core
-  integration risk.
-- **Docker image publishing and releases.** No `docker-publish` or
-  `release` job in CI, though a `Dockerfile` exists for local/manual use.
 - **Any change to `fulfillment-execution` beyond what
   `feature/labor-performance-hooks` already does.** This build is 100%
   additive from that repo's point of view.
 
-### Docusaurus site
+### Now built (fleet-parity pass) — no longer deferred
 
-**No working `npm run build` in this first pass.** The four ADRs under
-`docs/docs/adr/` exist with the exact Docusaurus-style frontmatter shape
-`order-management`'s ADRs use, so a future Docusaurus scaffold can adopt
-them directly, but no `docs/package.json`/`docusaurus.config.ts` was built
-this round — matching `order-management`'s OWN v1 scope-cut before its
-later Docusaurus-adoption PR. The ADR markdown content existing with
-correct frontmatter matters more than a working site build for this first
-pass.
+The following were listed as deferred in this service's original v1 build
+and have since been added, bringing this service to full fleet parity with
+`inventory-storage` / `wes-work-planning`:
+
+- **Helm chart** (`charts/labor-performance/`) — `helm install
+  labor-performance charts/labor-performance`.
+- **godog/BDD acceptance tests** (`features/*.feature` +
+  `features_test.go`) — covers the REST-visible contract (define/revise/get
+  a standard, get-scorecard 404, get-task-type-performance always-200).
+- **Postgres integration tests**
+  (`internal/adapters/outbound/postgres/*_integration_test.go`) — real
+  round-trips for `StandardRepo`, `PerformanceRepo`, `ProcessedEventRepo`.
+- **Gremlins mutation-testing gate** (`.gremlins.yaml`) — see the CI section
+  above for the measured baseline.
+- **arch-go fitness tests** (`internal/architecture/architecture_test.go`)
+  — enforces the hexagonal dependency rule.
+- **Spectral API linting** (`.spectral.yaml`, `.spectral.asyncapi.yaml`) —
+  against both `apis/openapi.yaml` and `apis/asyncapi.yaml`.
+- **CodeQL, OpenSSF Scorecard, Trivy container scanning.**
+- **Docker image publishing + release automation** (`docker-publish`,
+  `release` CI jobs) — cosign keyless signing, SPDX SBOM attestation,
+  auto-tagged GitHub releases, Helm chart published to
+  `oci://ghcr.io/claudioed`.
+- **Full Docusaurus documentation site**, live at
+  https://claudioed.github.io/labor-performance/.
 
 ## Architecture Decision Records
 

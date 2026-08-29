@@ -1,0 +1,1 @@
+{"parameters":[{"name":"taskType","in":"path","required":true,"schema":{"type":"string","enum":["PICK","PACK","SLAM"],"description":"Mirrors fulfillment-execution's task.Type enum exactly.","title":"TaskType"}}]}
