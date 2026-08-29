@@ -4,6 +4,8 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  schedule:
+    - cron: "0 6 * * 1"   # weekly, Monday 6am UTC, for the mutation job only
   workflow_dispatch: {}
 
 permissions:
@@ -17,13 +19,6 @@ defaults:
   run:
     shell: bash
 
-# v1 runs lint, test, and vuln — mirroring order-management's v1 CI shape
-# (same golangci-lint version pin, same setup-go action version), plus a
-# govulncheck job order-management v1 skipped but this brand-new service
-# adds from day one (fresh dependencies — kafka-go, pgx — worth scanning
-# immediately). helm-lint, docker-publish, release, mutation, bdd,
-# integration, and api-lint remain deliberately deferred — see the
-# README's "Deferred (v1)" section.
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -89,6 +84,103 @@ jobs:
           name: coverage
           path: coverage.out
 
+  bdd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run BDD (godog/Gherkin) acceptance tests
+        run: go test ./... -run TestFeatures -v
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: labor
+          POSTGRES_PASSWORD: labor
+          POSTGRES_DB: labor
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Integration tests
+        env:
+          DATABASE_URL: "postgres://labor:labor@localhost:5432/labor?sslmode=disable"
+        # KAFKA_BROKERS is deliberately left unset here: the existing
+        # consumer_integration_test.go (TestConsumer_ProjectsRealBrokerMessages)
+        # skips itself gracefully without a broker (t.Skip), so this job
+        # runs it alongside the new Postgres-backed repo integration tests
+        # without needing a Kafka service container. See README's CI
+        # section for why this matches the fleet convention rather than
+        # standing up a broker just to immediately skip against it.
+        run: go test -tags=integration ./... -race -count=1
+
+  # Fast, BLOCKING mutation subset: runs on every push/PR so a drop in test
+  # quality (tests that execute but stop asserting) is caught immediately.
+  # Subset = ./internal/domain/performance, the TaskPerformance aggregate:
+  # the richest behavioural core in the domain (idempotency-adjacent
+  # invariants live in the application layer, but the never-divide-by-zero
+  # EfficiencyPct computation and immutability live here). Thresholds/
+  # workers/timeout come from .gremlins.yaml, so this job, the scheduled
+  # exhaustive `mutation` job below and `make mutation` all agree. The
+  # exhaustive run stays in the `mutation` job.
+  mutation-fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install gremlins
+        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+      - name: Mutation testing (fast subset — TaskPerformance aggregate)
+        run: gremlins unleash ./internal/domain/performance
+
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install gremlins
+        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+      - name: Mutation testing (domain layer)
+        run: gremlins unleash ./internal/domain --workers 1 --timeout-coefficient 30
+
+  api-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+      - name: Install Spectral
+        run: npm install -g @stoplight/spectral-cli
+      - name: Lint OpenAPI spec
+        run: spectral lint apis/openapi.yaml --ruleset .spectral.yaml --fail-severity=warn
+      - name: Lint AsyncAPI spec
+        run: spectral lint apis/asyncapi.yaml --ruleset .spectral.asyncapi.yaml --fail-severity=warn
+
+  # Supply-chain sensor: known CVEs in the dependency graph and in the Go
+  # stdlib version this module builds against.
   vuln:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -101,3 +193,211 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: govulncheck
         run: govulncheck ./...
+
+  helm-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.16.4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+          check-latest: true
+      - uses: helm/chart-testing-action@v2.8.0
+      - name: Run chart-testing (lint)
+        run: ct lint --charts charts/labor-performance --validate-maintainers=false --check-version-increment=false
+
+  arch-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Architecture fitness tests
+        run: go test ./internal/architecture/... -v
+
+  # Shift-left container scan: builds the image (no push) on every push AND
+  # every PR, so a vulnerable base image or dependency is caught before
+  # merge, not just at publish time. Blocks on CRITICAL/HIGH with a known
+  # fix; findings also land in the repo's Security tab (SARIF) regardless
+  # of pass/fail so history is visible even when nothing blocks.
+  trivy-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (local only, not pushed)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: labor-performance:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Trivy scan (SARIF, always uploaded)
+        uses: aquasecurity/trivy-action@v0.36.0
+        if: always()
+        with:
+          image-ref: 'labor-performance:scan'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          ignore-unfixed: true
+      - name: Upload Trivy SARIF to Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+      - name: "Trivy scan (blocking gate: CRITICAL/HIGH with a fix available)"
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: 'labor-performance:scan'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+  docker-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [lint, test, bdd, integration, mutation-fast, vuln, api-lint, helm-lint, arch-test, trivy-scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write   # cosign keyless signing (Fulcio/Rekor via GitHub OIDC)
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set image tag (short SHA)
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            claudioed/labor-performance:latest
+            claudioed/labor-performance:${{ env.SHORT_SHA }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Sign the published image (keyless, GitHub OIDC identity)
+        run: |
+          cosign sign --yes \
+            claudioed/labor-performance@${{ steps.build.outputs.digest }}
+      - name: Generate SBOM (SPDX) for the published image
+        uses: anchore/sbom-action@v0
+        with:
+          image: claudioed/labor-performance@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+      - name: Attest the image with its SBOM (keyless)
+        run: |
+          cosign attest --yes \
+            --predicate sbom.spdx.json \
+            --type spdxjson \
+            claudioed/labor-performance@${{ steps.build.outputs.digest }}
+      - name: Upload SBOM as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 90
+
+  # Cuts a GitHub Release (+ matching git tag + versioned Docker tag) on every
+  # merge to main. Runs only after docker-publish actually succeeded, so a
+  # release always points at an image that is genuinely live on Docker Hub.
+  # Versioning: simple auto-increment patch (vX.Y.Z -> vX.Y.(Z+1)), starting
+  # at v0.1.0 if no tag exists yet. No commit-message parsing.
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [docker-publish]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Compute next version
+        id: version
+        run: |
+          git fetch origin --tags --force
+          latest=$(git tag -l 'v*.*.*' | sort -V | tail -n1)
+          if [ -z "$latest" ]; then
+            new="v0.1.0"
+          else
+            IFS='.' read -r major minor patch <<< "${latest#v}"
+            patch=$((patch + 1))
+            new="v${major}.${minor}.${patch}"
+          fi
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+      - name: Set image tag (short SHA)
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Tag the already-published image with the release version
+        run: |
+          docker buildx imagetools create \
+            -t claudioed/labor-performance:${{ steps.version.outputs.version }} \
+            claudioed/labor-performance:${{ env.SHORT_SHA }}
+      - name: Package and publish the Helm chart for this release
+        run: |
+          CHART_VERSION="${{ steps.version.outputs.version }}"
+          CHART_VERSION="${CHART_VERSION#v}"
+          mkdir -p /tmp/chart-out
+          helm package charts/labor-performance \
+            --version "$CHART_VERSION" \
+            --app-version "$CHART_VERSION" \
+            -d /tmp/chart-out
+          echo "CHART_TGZ=/tmp/chart-out/labor-performance-${CHART_VERSION}.tgz" >> "$GITHUB_ENV"
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
+            -u "${{ github.actor }}" --password-stdin
+          helm push "/tmp/chart-out/labor-performance-${CHART_VERSION}.tgz" \
+            oci://ghcr.io/claudioed
+      - name: Create and push the git tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.version.outputs.version }}
+          git push origin ${{ steps.version.outputs.version }}
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: ${{ env.CHART_TGZ }}
+          body: |
+            Docker image: `claudioed/labor-performance:${{ steps.version.outputs.version }}`
+            (also tagged `latest` and `${{ env.SHORT_SHA }}`)
+
+            Helm chart: `oci://ghcr.io/claudioed/labor-performance:${{ steps.version.outputs.version }}`
+            (also attached below as a `.tgz`)

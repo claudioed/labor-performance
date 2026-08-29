@@ -1,0 +1,56 @@
+---
+id: labor-performance-api
+title: "Labor Performance API"
+description: "Engineered labor standards (expected time per TaskType) and actual-vs-standard performance scoring for completed fulfillment-execution tasks. This service defines standards and reads performance/scorecards; it NEVER accepts a TaskPerformance write over REST — that is exclusively driven by the inbound Kafka consumer of fulfillment-execution's TaskCompleted event (see apis/asyncapi.yaml)."
+sidebar_label: Introduction
+sidebar_position: 0
+hide_title: true
+custom_edit_url: null
+---
+
+import ApiLogo from "@theme/ApiLogo";
+import Heading from "@theme/Heading";
+import SchemaTabs from "@theme/SchemaTabs";
+import TabItem from "@theme/TabItem";
+import Export from "@theme/ApiExplorer/Export";
+
+<span
+  className={"theme-doc-version-badge badge badge--secondary"}
+  children={"Version: 1.0.0"}
+>
+</span>
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Labor Performance API"}
+>
+</Heading>
+
+
+
+Engineered labor standards (expected time per TaskType) and actual-vs-standard performance scoring for completed fulfillment-execution tasks. This service defines standards and reads performance/scorecards; it NEVER accepts a TaskPerformance write over REST — that is exclusively driven by the inbound Kafka consumer of fulfillment-execution's TaskCompleted event (see apis/asyncapi.yaml).
+
+
+<div
+  style={{"display":"flex","flexDirection":"column","marginBottom":"var(--ifm-paragraph-margin-bottom)"}}
+>
+  <h3
+    style={{"marginBottom":"0.25rem"}}
+  >
+    Contact
+  </h3><span>
+    Labor Performance Team: 
+  </span><span>
+    URL: [https://github.com/claudioed/labor-performance](https://github.com/claudioed/labor-performance)
+  </span>
+</div><div
+  style={{"marginBottom":"var(--ifm-paragraph-margin-bottom)"}}
+>
+  <h3
+    style={{"marginBottom":"0.25rem"}}
+  >
+    License
+  </h3>
+</div>
+      

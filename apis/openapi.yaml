@@ -11,6 +11,9 @@ info:
   version: "1.0.0"
   license:
     name: MIT
+  contact:
+    name: Labor Performance Team
+    url: https://github.com/claudioed/labor-performance
 servers:
   - url: http://localhost:8080
     description: Local development
@@ -27,6 +30,7 @@ paths:
       tags: [health]
       operationId: getHealthz
       summary: Liveness probe
+      description: Reports whether the service process is up and able to serve requests.
       responses:
         "200":
           description: Service is up
@@ -77,6 +81,10 @@ paths:
       tags: [standards]
       operationId: getStandard
       summary: Get the currently-active labor standard for a TaskType
+      description: >
+        Returns the LaborStandard whose effective range currently covers
+        "now" for this TaskType (EffectiveTo is null), or a 404 if none
+        does.
       parameters:
         - $ref: "#/components/parameters/TaskTypePathParam"
       responses:
