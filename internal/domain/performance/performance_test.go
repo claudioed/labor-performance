@@ -49,7 +49,7 @@ func TestNew_FailingPath_EmptyTaskId(t *testing.T) {
 }
 
 // TestEfficiencyPct_NeverDividesByZero exercises every named invariant
-// case from SPEC.md's "EfficiencyPct computation" section.
+// case from CLAUDE.md's "EfficiencyPct computation" section.
 func TestEfficiencyPct_NeverDividesByZero(t *testing.T) {
 	cases := []struct {
 		name                        string

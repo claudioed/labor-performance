@@ -2,7 +2,7 @@
 #
 # Every target below mirrors a sensor in .github/workflows/ci.yml, so the
 # same feedback CI gives you post-push is available locally, pre-commit.
-# See SPEC.md's "Local quality gate" section.
+# See CLAUDE.md's "Local quality gate" section.
 #
 # v1 deliberately has NO mutation/bdd targets — matching order-management's
 # own v1 scope-cut — but DOES include a Kafka integration test target,

@@ -1,5 +1,5 @@
 // Package events provides outbound EventPublisher implementations. v1
-// ships only the log publisher — see SPEC.md's "Domain events" section:
+// ships only the log publisher — see CLAUDE.md's "Domain events" section:
 // LaborStandardDefined/LaborStandardRevised/TaskPerformanceRecorded are
 // published for symmetry with the fleet's convention and to leave an
 // integration seam open, but no Kafka publish is required since no other

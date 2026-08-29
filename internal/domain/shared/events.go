@@ -4,7 +4,7 @@ import "time"
 
 // DomainEvent is a past-tense fact produced by an aggregate in this
 // domain. The outbound event publisher serializes and logs these; the
-// domain never depends on the publishing mechanism. Per SPEC.md, v1 ships
+// domain never depends on the publishing mechanism. Per CLAUDE.md, v1 ships
 // a log publisher only — no Kafka publish of these events is required
 // (they are not yet consumed by any other service).
 type DomainEvent interface {

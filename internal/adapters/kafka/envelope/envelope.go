@@ -22,12 +22,12 @@ type Envelope struct {
 
 // Source identifies this service in the "source" field of any envelope it
 // might publish in the future (v1 does not publish to Kafka — see
-// SPEC.md's "Domain events" section).
+// CLAUDE.md's "Domain events" section).
 const Source = "labor-performance"
 
 // TopicFulfillmentEvents is the shared, fan-out topic this service
 // consumes from — the SAME topic wes-work-planning already consumes,
-// per SPEC.md's "Inbound Kafka contract" section.
+// per CLAUDE.md's "Inbound Kafka contract" section.
 const TopicFulfillmentEvents = "warehouse.fulfillment.events"
 
 // EventTypeTaskCompleted is the only event type on TopicFulfillmentEvents
