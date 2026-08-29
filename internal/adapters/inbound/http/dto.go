@@ -1,0 +1,54 @@
+// Package http is the inbound chi adapter: DTOs, handlers, routing, and
+// domain-error-to-HTTP-status mapping. Domain structs never cross this
+// boundary — every response below is a DTO owned by this package.
+package http
+
+// defineStandardRequest is the POST /standards request body.
+type defineStandardRequest struct {
+	TaskType        string `json:"taskType"`
+	ExpectedSeconds int64  `json:"expectedSeconds"`
+}
+
+// standardResponse is the response body for DefineStandard and
+// GetStandard.
+type standardResponse struct {
+	TaskType        string  `json:"taskType"`
+	ExpectedSeconds int64   `json:"expectedSeconds"`
+	EffectiveFrom   string  `json:"effectiveFrom"`
+	EffectiveTo     *string `json:"effectiveTo,omitempty"`
+}
+
+// taskTypeBreakdownResponse is one TaskType's slice of a
+// scorecardResponse.
+type taskTypeBreakdownResponse struct {
+	TaskCount         int      `json:"taskCount"`
+	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
+}
+
+// scorecardResponse is the GET /associates/{associateId}/scorecard
+// response body.
+type scorecardResponse struct {
+	AssociateId       string                               `json:"associateId"`
+	TaskCount         int                                  `json:"taskCount"`
+	MeanEfficiencyPct *float64                             `json:"meanEfficiencyPct"`
+	ByTaskType        map[string]taskTypeBreakdownResponse `json:"byTaskType"`
+}
+
+// taskTypePerformanceResponse is the GET /task-types/{taskType}/performance
+// response body.
+type taskTypePerformanceResponse struct {
+	TaskType          string   `json:"taskType"`
+	TaskCount         int      `json:"taskCount"`
+	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
+}
+
+// problemDetails is the RFC 7807 (Problem Details for HTTP APIs) response
+// body used for every error response in this service — the same shape the
+// other six services in this fleet emit.
+type problemDetails struct {
+	Type     string `json:"type"`
+	Title    string `json:"title"`
+	Status   int    `json:"status"`
+	Detail   string `json:"detail"`
+	Instance string `json:"instance,omitempty"`
+}
