@@ -51,7 +51,7 @@ func newTestEnv(t *testing.T, now time.Time) *testEnv {
 }
 
 // recordViaBackdoor bypasses HTTP (there is deliberately no REST endpoint
-// for RecordTaskPerformance — SPEC.md is explicit it is Kafka-consumer-
+// for RecordTaskPerformance — CLAUDE.md is explicit it is Kafka-consumer-
 // driven only) to seed TaskPerformance rows for the GET tests below.
 func (e *testEnv) recordViaBackdoor(t *testing.T, req usecases.RecordTaskPerformanceRequest) {
 	t.Helper()

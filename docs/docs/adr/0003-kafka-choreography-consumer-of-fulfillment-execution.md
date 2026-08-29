@@ -102,7 +102,7 @@ of it.
 `feature/labor-performance-hooks` publisher) does not carry a `task_type`
 field at all. This service resolves `TaskType` as `""` (unclassified) for
 every event as a result — see `shared.ParseTaskTypeLenient`'s doc comment.
-This is documented, not silently absorbed: SPEC.md's explicit instruction
+This is documented, not silently absorbed: CLAUDE.md's explicit instruction
 to "degrade gracefully" rather than block the build on that PR's timing
 extends to this field too. A `""`-typed `TaskPerformance` is still
 recorded and counted in a hypothetical "all types" view, but never

@@ -43,7 +43,7 @@ func NewTaskType(value string) (TaskType, error) {
 // verified against fulfillment-execution's feature/labor-performance-hooks
 // publisher this session, TaskCompletedData carries no task_type field at
 // all today (only task_id, station_id, work_unit_id, associate_id,
-// duration_seconds — see the exact envelope in SPEC.md's "Inbound Kafka
+// duration_seconds — see the exact envelope in CLAUDE.md's "Inbound Kafka
 // contract" section). Since this service MUST NOT call fulfillment-
 // execution synchronously to resolve a task's type, and a TaskCompleted
 // event is a real, must-be-recorded business fact regardless, an

@@ -34,7 +34,7 @@ import (
 // fulfillment-execution payload that predates that enrichment simply
 // omits them from the wire — this struct's zero values ("" / 0) already
 // degrade gracefully to exactly the "unmeasurable"/"no occupant" cases
-// SPEC.md's aggregate invariants require, so no special-casing is needed
+// CLAUDE.md's aggregate invariants require, so no special-casing is needed
 // here beyond ordinary Go zero-value JSON unmarshaling. task_type is
 // deliberately NOT part of that struct today (a real, documented wire gap
 // — see shared.ParseTaskTypeLenient's doc comment), so it is likewise

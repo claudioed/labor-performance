@@ -12,7 +12,7 @@
 // service starts and serves exactly as it would without OTel.
 //
 // Copied verbatim from workforce-management's
-// internal/adapters/outbound/telemetry package per SPEC.md, with only the
+// internal/adapters/outbound/telemetry package per CLAUDE.md, with only the
 // service.name resource attribute (passed in by the caller, not hardcoded
 // here) differing at the call site.
 package telemetry

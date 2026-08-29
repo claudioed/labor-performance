@@ -29,7 +29,7 @@ type Server struct {
 	GetTaskTypePerformance *usecases.GetTaskTypePerformance
 }
 
-// NewRouter builds the chi router for every endpoint in SPEC.md's REST
+// NewRouter builds the chi router for every endpoint in CLAUDE.md's REST
 // API. A nil logger defaults to slog.Default().
 func NewRouter(s *Server, logger *slog.Logger) http.Handler {
 	if logger == nil {

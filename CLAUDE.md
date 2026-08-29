@@ -1,11 +1,10 @@
 # Project: Labor Performance (Supporting Bounded Context)
 
-> This is the **seventh** bounded-context Go service in the warehouse-systems
+> This is the **eighth** bounded-context Go service in the warehouse-systems
 > fleet (after order-management, inventory-storage, wes-work-planning,
 > workforce-management, fulfillment-execution, facility-layout,
-> warehouse-ops-agent). This SPEC.md is the build spec for this new service
-> (CLAUDE.md write was blocked by a protected-file approval that timed out;
-> this file carries the same content and role).
+> warehouse-ops-agent). This CLAUDE.md is the build spec that drove this
+> service's v1 implementation (PR #1, merged 2026-08-29).
 
 ## Why this context exists (read before writing any code)
 

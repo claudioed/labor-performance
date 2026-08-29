@@ -81,7 +81,7 @@ type TaskTypePerformance struct {
 }
 
 // EventPublisher publishes domain events raised by aggregates. v1 ships a
-// log publisher only — see SPEC.md's "Domain events" section.
+// log publisher only — see CLAUDE.md's "Domain events" section.
 type EventPublisher interface {
 	Publish(ctx context.Context, events ...shared.DomainEvent) error
 }
