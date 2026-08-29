@@ -1,0 +1,362 @@
+# Labor Performance
+
+> **⚠️ Study project.** This repository is an educational exercise in
+> Domain-Driven Design applied to warehouse management/execution systems. It
+> follows real industry-standard patterns and terminology (WMS/WES/WCS,
+> CloudEvents-like envelopes, RFC 7807, hexagonal architecture) but is
+> **not a production system** and is **not affiliated with, endorsed by, or
+> representative of Amazon, Manhattan Associates, Blue Yonder, or any other
+> company**.
+
+Engineered labor standards ("a PICK should take 45s") and
+actual-vs-standard performance scoring ("this associate's last PICK took
+52s — 87% of standard") for the `warehouse-systems` fleet — the seventh
+bounded-context Go service in this fleet, after `order-management`,
+`inventory-storage`, `wes-work-planning`, `workforce-management`,
+`fulfillment-execution`, and `facility-layout`.
+
+## Why this context exists
+
+Competitor research (Manhattan Active Labor Management, Blue Yonder
+Workforce & Labor Management) converges on this as a distinct product
+capability, not a sub-feature of shift/schedule planning. Neither
+`workforce-management` (which explicitly "stops at the path boundary" and
+never links an associate to a task) nor `fulfillment-execution` (which
+follows a strict "Task/Station only" design discipline) is the right home
+for it. See
+[ADR 0002](docs/docs/adr/0002-new-bounded-context-not-extension-of-workforce-or-fulfillment.md)
+for the full reasoning.
+
+## Bounded-context boundary (read this first)
+
+This service is a **pure Kafka consumer** of `fulfillment-execution`'s
+already-published `TaskCompleted` integration event (topic
+`warehouse.fulfillment.events`). It is a **separate Go module in a
+separate repository** — it imports no Go code from `fulfillment-execution`
+or `workforce-management` and has no write access to either service's
+aggregates. It never calls either sibling synchronously: this is
+choreography, not orchestration, matching the proven
+`wes-work-planning` ← `fulfillment-execution`/`order-management` consumer
+pattern already in this fleet. See
+[ADR 0003](docs/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution.md).
+
+This build is **100% additive** from `fulfillment-execution`'s point of
+view — the sibling `feature/labor-performance-hooks` PR in that repo
+already carries everything this service needs
+(`associate_id`, `duration_seconds`) on the existing `TaskCompleted`
+event; nothing else in that repository is touched.
+
+This context DOES expose its own REST API (to configure standards and
+read performance scores) — that is this context's OWN Open Host Service,
+symmetric with every other context in the fleet.
+
+## Architecture
+
+Hexagonal (ports & adapters), with a strict inward-only dependency rule —
+**domain depends on nothing; application depends on domain; adapters
+depend on application/domain** — identical in shape to the other six
+services in the fleet. See
+[ADR 0001](docs/docs/adr/0001-hexagonal-ports-and-adapters.md).
+
+```
+cmd/labor/                        main.go — the only composition root
+internal/
+  domain/
+    standard/                     LaborStandard aggregate: TaskType -> expected duration
+    performance/                  TaskPerformance aggregate: one scored completed task
+    shared/                       TaskType, AssociateId, domain events, errors
+  application/
+    ports/                        OUT: StandardRepo, PerformanceRepo, ProcessedEvents,
+                                   EventPublisher, Clock
+    usecases/                     DefineStandard, GetStandard, RecordTaskPerformance
+                                   (Kafka-consumer-driven), GetAssociateScorecard,
+                                   GetTaskTypePerformance
+  adapters/
+    inbound/http/                 chi handlers, DTOs, RFC 7807 error mapping
+    inbound/kafka/                consumes warehouse.fulfillment.events, TaskCompleted only
+    outbound/postgres/            pgxpool repos + golang-migrate runner
+    outbound/memory/              in-memory repos for tests/local
+    outbound/events/              log publisher (Kafka-ready interface, unused for publish in v1)
+    outbound/telemetry/           OTel traces/metrics/logs (copied from workforce-management)
+migrations/                       golang-migrate SQL files
+apis/openapi.yaml                 This service's OWN REST API (5 endpoints)
+apis/asyncapi.yaml                What this service SUBSCRIBES TO (consumer-side contract)
+docker-compose.yml                Local Postgres 16
+docs/docs/adr/                    Architecture Decision Records
+```
+
+The domain layer is pure Go: no `chi`, no `pgx`, no `kafka-go`. No JSON
+struct tags in the domain packages.
+
+## Business rules worth knowing before you read the code
+
+- **LaborStandard is append-only history.** `DefineStandard` for a
+  `TaskType` that already has an active standard closes the prior
+  standard's effective range and starts a new one — it never overwrites
+  `ExpectedSeconds` in place. See
+  [ADR 0004](docs/docs/adr/0004-standard-frozen-at-completion-time-not-recomputed.md).
+- **A `TaskPerformance`'s `StandardSecondsAtCompletion` is resolved
+  once, "active AS OF `CompletedAt`", and frozen forever.** A revision
+  never rewrites a past row's efficiency, and a possibly out-of-order or
+  replayed Kafka message is scored against the standard genuinely in
+  force when the task completed, not whatever is active right now. See
+  [ADR 0004](docs/docs/adr/0004-standard-frozen-at-completion-time-not-recomputed.md).
+- **`EfficiencyPct` never divides by zero.** `ActualSeconds<=0` (an
+  unmeasurable completion) or `StandardSecondsAtCompletion<=0` (no
+  standard was active) both yield `null`, not an error and not a
+  fabricated number.
+- **An empty `AssociateId` is legitimate, not an error.** A `TaskCompleted`
+  from a station with no checked-in occupant (e.g. a robot station) is
+  still recorded and counted in `GetTaskTypePerformance`, just excluded
+  from any per-associate scorecard.
+- **Idempotent on the Kafka message's `event_id`.** Recording the same
+  `event_id` twice is a no-op, never a double-count. Keyed on `event_id`,
+  not `TaskId`, since a task id could in principle be reused after a long
+  time.
+
+## Running locally
+
+### 1. Without a database or a broker (fastest)
+
+With no `DATABASE_URL`, the service starts on the in-memory adapters and is
+fully functional over REST (the Kafka consumer still needs a broker to
+actually receive messages, but the process starts and serves regardless):
+
+```bash
+go run ./cmd/labor
+# {"level":"INFO","msg":"database url not configured; using in-memory adapters"}
+# {"level":"INFO","msg":"http server listening","addr":":8080"}
+# {"level":"INFO","msg":"kafka consumer starting", ...}
+```
+
+### 2. With Postgres
+
+```bash
+docker compose up -d postgres          # Postgres 16 on localhost:5435
+
+export DATABASE_URL='postgres://labor:***@localhost:5435/labor?sslmode=disable'
+go run ./cmd/labor                     # migrations run automatically at startup
+```
+
+### 3. Kafka consumer smoke test against the shared broker
+
+```bash
+# From the workspace root, start the fleet's shared Kafka broker:
+docker compose -f ../docker-compose.kafka.yml up -d
+
+export KAFKA_BROKERS=localhost:9092
+export KAFKA_CONSUMER_GROUP=labor-performance
+go run ./cmd/labor
+
+# In another terminal, publish a TaskCompleted-shaped message using any
+# Kafka producer CLI, e.g. kcat:
+echo '{"event_id":"'$(uuidgen)'","event_type":"TaskCompleted","occurred_at":"2026-08-29T22:00:00Z","source":"fulfillment-execution","data":{"task_id":"task-1","station_id":"station-1","work_unit_id":"wu-1","associate_id":"assoc-1","duration_seconds":52}}' \
+  | kcat -P -b localhost:9092 -t warehouse.fulfillment.events
+
+# Then verify it was recorded:
+curl -s localhost:8080/associates/assoc-1/scorecard
+```
+
+### Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `HTTP_ADDR` | `:8080` | Listen address. |
+| `DATABASE_URL` | *(unset)* | Postgres DSN. Unset ⇒ in-memory adapters. |
+| `MIGRATIONS_PATH` | `migrations` | golang-migrate source directory. |
+| `KAFKA_BROKERS` | `localhost:9092` | Comma-separated broker addresses. |
+| `KAFKA_CONSUMER_GROUP` | `labor-performance` | Consumer group id on `warehouse.fulfillment.events`. |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:5187` | Comma-separated allowed origins. |
+| `OTEL_SERVICE_NAME` | `labor-performance` | OTel `service.name` resource attribute. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP/gRPC Collector endpoint. |
+| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
+
+## API
+
+Four endpoints plus a liveness probe. The full contract, including the RFC
+7807 error schema, is in [`apis/openapi.yaml`](apis/openapi.yaml).
+
+| Method | Path | Use case |
+| --- | --- | --- |
+| `POST` | `/standards` | DefineStandard |
+| `GET` | `/standards/{taskType}` | GetStandard |
+| `GET` | `/associates/{associateId}/scorecard` | GetAssociateScorecard |
+| `GET` | `/task-types/{taskType}/performance` | GetTaskTypePerformance |
+| `GET` | `/healthz` | Liveness probe |
+
+There is deliberately **no** REST endpoint for `RecordTaskPerformance` —
+it is exclusively Kafka-consumer-driven (see
+[ADR 0003](docs/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution.md)).
+
+Every error response is `application/problem+json` (RFC 7807), the same
+shape every other service in this fleet emits.
+
+### Curl walkthrough
+
+**Health:**
+
+```bash
+curl -s localhost:8080/healthz
+# {"status":"ok"}
+```
+
+**DefineStandard:**
+
+```bash
+curl -s -X POST localhost:8080/standards \
+  -H 'Content-Type: application/json' \
+  -d '{"taskType":"PICK","expectedSeconds":45}'
+# 201 Created
+# {"taskType":"PICK","expectedSeconds":45,"effectiveFrom":"2026-08-29T12:00:00Z"}
+```
+
+Revising it closes the prior record and starts a new one:
+
+```bash
+curl -s -X POST localhost:8080/standards \
+  -H 'Content-Type: application/json' \
+  -d '{"taskType":"PICK","expectedSeconds":40}'
+# 201 Created
+# {"taskType":"PICK","expectedSeconds":40,"effectiveFrom":"2026-08-30T09:00:00Z"}
+```
+
+**GetStandard:**
+
+```bash
+curl -s localhost:8080/standards/PICK
+# 200 OK, or 404 application/problem+json if none is active
+```
+
+**GetAssociateScorecard** (populated only by the Kafka consumer):
+
+```bash
+curl -s localhost:8080/associates/assoc-1/scorecard
+# 200 OK:
+# {"associateId":"assoc-1","taskCount":3,"meanEfficiencyPct":91.2,
+#  "byTaskType":{"PICK":{"taskCount":3,"meanEfficiencyPct":91.2}}}
+# 404 application/problem+json if this service has never seen assoc-1
+```
+
+**GetTaskTypePerformance** (fleet-wide, all associates):
+
+```bash
+curl -s localhost:8080/task-types/PICK/performance
+# 200 OK — always 200, including a zero-count result for a never-seen type:
+# {"taskType":"PICK","taskCount":42,"meanEfficiencyPct":88.7}
+```
+
+## Quality gate
+
+Every `make` target mirrors a step in `.github/workflows/ci.yml`, so the
+same feedback CI gives you post-push is available locally, pre-commit:
+
+```bash
+make check       # fmt-check + vet + build + lint + test -race
+make check-all   # check + coverage (gate: 90% on domain + application)
+```
+
+| Target | What it runs |
+| --- | --- |
+| `build` | `go build ./...` |
+| `vet` | `go vet ./...` |
+| `fmt` / `fmt-check` | `gofmt -w .` / fail if `gofmt -l .` is non-empty |
+| `lint` | `golangci-lint run ./...` (CI pins `v2.13.1`) |
+| `test` | `go test ./... -race` |
+| `coverage` | coverage profile + the 90% gate |
+| `integration-kafka` | Build-tagged consumer test against a real broker (`KAFKA_BROKERS` required) |
+
+Git hooks are wired through [lefthook](https://github.com/evilmartians/lefthook)
+— `pre-commit` runs fmt-check/vet/lint, `pre-push` runs `make check`. Hooks
+are not tracked by git, so activate them once per clone:
+
+```bash
+brew install lefthook   # or: go install github.com/evilmartians/lefthook@latest
+lefthook install
+```
+
+CI runs three jobs in v1: **`lint`**, **`test`**, and **`vuln`**
+(govulncheck) — added from day one since this is a brand-new service with
+fresh dependencies (`kafka-go`, `pgx`) worth scanning immediately, unlike
+`order-management` v1 which deferred it.
+
+## Known gaps
+
+- **`fulfillment-execution`'s `TaskCompleted` payload does not carry a
+  `task_type` field today**, verified against its actual
+  `feature/labor-performance-hooks` publisher this session. This service
+  resolves `TaskType` as `""` (unclassified) for every consumed event as a
+  result. A `""`-typed row is still recorded and counted, but never
+  resolves a `LaborStandard` and never appears under
+  `GetTaskTypePerformance` (which requires PICK/PACK/SLAM). Adding
+  `task_type` to that payload on the fulfillment-execution side is a
+  natural, additive fast-follow that would let this service resolve it
+  directly — see
+  [ADR 0003](docs/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution.md).
+
+## Deferred (v1)
+
+The following are **deliberately out of scope for this first pass**. They
+are listed so an absence is never mistaken for an oversight — each is a
+decision, not a gap someone forgot about.
+
+- **`labor-mfe` micro-frontend remote.** CORS is added now (proactively,
+  matching the fleet's convention that CORS ships alongside a service's
+  first console-facing REST surface); the actual screen is a separate,
+  later PR.
+- **Automatic pay-for-performance / bonus calculation.** A real Manhattan
+  competitor feature, explicitly out of scope — this context surfaces the
+  number, a human/other system decides what to do with it.
+- **Gamification, coaching workflows, real-time digital communication to
+  associates.** Real Manhattan/Blue Yonder features, explicitly out of
+  scope for v1 — this is the foundational data model only.
+- **Publishing `LaborStandardDefined`/`LaborStandardRevised`/
+  `TaskPerformanceRecorded` to Kafka for other services to consume.** Log
+  publisher only, no integration contract yet — no other repo needs these
+  events today. `apis/asyncapi.yaml` documents only what this service
+  CONSUMES, not what it would publish.
+- **Helm chart / `warehouse-infra` kind-cluster wiring.** No `charts/`
+  directory and no `helm-lint` CI job.
+- **Gremlins mutation-testing gate.** No `.gremlins.yaml` and no
+  `mutation` job. The 90% coverage gate is the only test-quality sensor in
+  v1.
+- **godog / BDD acceptance tests.** No `features/` directory and no `bdd`
+  job. The behavioral rules are covered by table-driven unit tests and the
+  `httptest` suite instead.
+- **MCP inbound adapter.** HTTP and Kafka are the only inbound adapters.
+- **Per-service analytics data-mesh** (a separate analytics topic,
+  analytical Postgres, and projector/reports binaries, as several sibling
+  services now have). This service's OLTP write path already IS the
+  analytics-relevant signal (`TaskPerformance` rows); a dedicated
+  analytics side-projection is a natural but deferred fast-follow.
+- **Postgres integration tests.** The `postgres` adapter has no
+  `-tags=integration` suite and there is no `integration` CI job — the
+  Kafka consumer's integration surface is real-broker-tested instead (see
+  `make integration-kafka`), since that is this service's actual core
+  integration risk.
+- **Docker image publishing and releases.** No `docker-publish` or
+  `release` job in CI, though a `Dockerfile` exists for local/manual use.
+- **Any change to `fulfillment-execution` beyond what
+  `feature/labor-performance-hooks` already does.** This build is 100%
+  additive from that repo's point of view.
+
+### Docusaurus site
+
+**No working `npm run build` in this first pass.** The four ADRs under
+`docs/docs/adr/` exist with the exact Docusaurus-style frontmatter shape
+`order-management`'s ADRs use, so a future Docusaurus scaffold can adopt
+them directly, but no `docs/package.json`/`docusaurus.config.ts` was built
+this round — matching `order-management`'s OWN v1 scope-cut before its
+later Docusaurus-adoption PR. The ADR markdown content existing with
+correct frontmatter matters more than a working site build for this first
+pass.
+
+## Architecture Decision Records
+
+1. [0001 — Hexagonal (ports & adapters) architecture](docs/docs/adr/0001-hexagonal-ports-and-adapters.md)
+2. [0002 — A new bounded context, not an extension of workforce-management or fulfillment-execution](docs/docs/adr/0002-new-bounded-context-not-extension-of-workforce-or-fulfillment.md)
+3. [0003 — Kafka choreography consumer of fulfillment-execution, no REST dependency](docs/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution.md)
+4. [0004 — StandardSecondsAtCompletion is frozen at ingestion time, never recomputed](docs/docs/adr/0004-standard-frozen-at-completion-time-not-recomputed.md)
+
+## License
+
+MIT (or match the other repos' licensing — TBD).

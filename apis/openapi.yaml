@@ -1,0 +1,245 @@
+openapi: 3.0.3
+info:
+  title: Labor Performance API
+  description: >
+    Engineered labor standards (expected time per TaskType) and
+    actual-vs-standard performance scoring for completed fulfillment-execution
+    tasks. This service defines standards and reads performance/scorecards; it
+    NEVER accepts a TaskPerformance write over REST — that is exclusively
+    driven by the inbound Kafka consumer of fulfillment-execution's
+    TaskCompleted event (see apis/asyncapi.yaml).
+  version: "1.0.0"
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8080
+    description: Local development
+tags:
+  - name: standards
+    description: Engineered labor standards (TaskType -> expected duration)
+  - name: performance
+    description: Actual-vs-standard performance read models
+  - name: health
+    description: Liveness probe
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealthz
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /standards:
+    post:
+      tags: [standards]
+      operationId: defineStandard
+      summary: Define (or revise) the engineered labor standard for a TaskType
+      description: >
+        If a standard is already active for this TaskType, it is closed
+        (its effective range ends now) and a new one starts — append-only
+        history, never an in-place overwrite.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DefineStandardRequest"
+      responses:
+        "201":
+          description: Standard defined (or the revision recorded)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Standard"
+        "400":
+          description: Unknown task type
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "422":
+          description: Expected seconds must be greater than zero
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+  /standards/{taskType}:
+    get:
+      tags: [standards]
+      operationId: getStandard
+      summary: Get the currently-active labor standard for a TaskType
+      parameters:
+        - $ref: "#/components/parameters/TaskTypePathParam"
+      responses:
+        "200":
+          description: The currently-active standard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Standard"
+        "400":
+          description: Unknown task type
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "404":
+          description: No active standard for this task type
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+  /associates/{associateId}/scorecard:
+    get:
+      tags: [performance]
+      operationId: getAssociateScorecard
+      summary: Get one associate's performance scorecard
+      description: >
+        404 only when this service has never recorded a single
+        TaskPerformance row for this associate. An associate with 1+ rows
+        but an all-nil efficiency still returns 200 with
+        meanEfficiencyPct: null.
+      parameters:
+        - name: associateId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The associate's scorecard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scorecard"
+        "404":
+          description: No task performance recorded for this associate
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+  /task-types/{taskType}/performance:
+    get:
+      tags: [performance]
+      operationId: getTaskTypePerformance
+      summary: Get fleet-wide (all-associates) performance for a TaskType
+      description: >
+        Always returns 200, including a zero-count result for a TaskType
+        this service has never recorded — there is no "not found" case for
+        a closed, known enum.
+      parameters:
+        - $ref: "#/components/parameters/TaskTypePathParam"
+      responses:
+        "200":
+          description: The fleet-wide task-type performance read model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskTypePerformance"
+        "400":
+          description: Unknown task type
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+components:
+  parameters:
+    TaskTypePathParam:
+      name: taskType
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/TaskType"
+  schemas:
+    TaskType:
+      type: string
+      enum: [PICK, PACK, SLAM]
+      description: Mirrors fulfillment-execution's task.Type enum exactly.
+    DefineStandardRequest:
+      type: object
+      required: [taskType, expectedSeconds]
+      properties:
+        taskType:
+          $ref: "#/components/schemas/TaskType"
+        expectedSeconds:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 45
+    Standard:
+      type: object
+      properties:
+        taskType:
+          $ref: "#/components/schemas/TaskType"
+        expectedSeconds:
+          type: integer
+          format: int64
+          example: 45
+        effectiveFrom:
+          type: string
+          format: date-time
+        effectiveTo:
+          type: string
+          format: date-time
+          nullable: true
+          description: Present only on a superseded (closed) standard.
+    TaskTypeBreakdown:
+      type: object
+      properties:
+        taskCount:
+          type: integer
+        meanEfficiencyPct:
+          type: number
+          format: double
+          nullable: true
+    Scorecard:
+      type: object
+      properties:
+        associateId:
+          type: string
+        taskCount:
+          type: integer
+        meanEfficiencyPct:
+          type: number
+          format: double
+          nullable: true
+        byTaskType:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/TaskTypeBreakdown"
+    TaskTypePerformance:
+      type: object
+      properties:
+        taskType:
+          $ref: "#/components/schemas/TaskType"
+        taskCount:
+          type: integer
+        meanEfficiencyPct:
+          type: number
+          format: double
+          nullable: true
+    ProblemDetails:
+      type: object
+      description: RFC 7807 Problem Details for HTTP APIs.
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+      required: [type, title, status, detail]
