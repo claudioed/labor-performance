@@ -18,6 +18,16 @@ type GetAssociateScorecard struct {
 }
 
 func (uc *GetAssociateScorecard) Execute(ctx context.Context, associateId shared.AssociateId) (ports.Scorecard, error) {
+	// An empty AssociateId is fulfillment-execution's "no checked-in
+	// occupant" marker, never a real associate identity — a caller
+	// querying it can never mean a genuine associate, so this always
+	// 404s regardless of how many empty-AssociateId rows this service
+	// has recorded (those rows are deliberately excluded from every
+	// scorecard; see the TaskPerformance aggregate's doc comment).
+	if associateId == "" {
+		return ports.Scorecard{}, ErrAssociateNotFound
+	}
+
 	exists, err := uc.Performances.ExistsByAssociateID(ctx, associateId)
 	if err != nil {
 		return ports.Scorecard{}, err
