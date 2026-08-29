@@ -1,0 +1,258 @@
+asyncapi: 2.6.0
+
+info:
+  title: Labor Performance — Inbound Events
+  version: "1.0.0"
+  description: |
+    Consumer-side event contract for the **Labor Performance** bounded
+    context. Unlike every other `apis/asyncapi.yaml` in this fleet (which
+    document what a service PUBLISHES), this document describes what this
+    service SUBSCRIBES TO: it is a **pure Kafka consumer** of
+    `fulfillment-execution`'s already-published `TaskCompleted` integration
+    event. This service has no REST or Go-import dependency on
+    fulfillment-execution — everything it needs (`associate_id`, `task_id`,
+    `duration_seconds`) already travels on the Kafka event (see the
+    bounded-context-boundary decision in ADR
+    0003-kafka-choreography-consumer-of-fulfillment-execution.md).
+
+    ## Message format
+
+    Every message on `warehouse.fulfillment.events` uses the fixed,
+    CloudEvents-*like* (but NOT strict CloudEvents-spec) envelope shared by
+    every warehouse-systems publisher in this fleet:
+
+    ```json
+    {
+      "event_id": "uuid-v4",
+      "event_type": "TaskCompleted",
+      "occurred_at": "2026-08-29T22:00:00Z",
+      "source": "fulfillment-execution",
+      "data": { ... }
+    }
+    ```
+
+    `event_id` is the de-duplication key this service uses (see the
+    `ProcessedEvents` idempotency gate) — NOT `task_id`, since a task id
+    could in principle be reused after a very long time.
+
+    ## Shared, fan-out topic
+
+    `warehouse.fulfillment.events` is the SAME topic `wes-work-planning`
+    already consumes from, under its own consumer group. This service uses
+    its own consumer group id (`labor-performance` by default,
+    `KAFKA_CONSUMER_GROUP` env), so both consumers see every message
+    independently. Only `event_type == "TaskCompleted"` is acted on — every
+    other event type on this shared topic (there are none from
+    fulfillment-execution today, but the topic is shared/fan-out by
+    convention) is silently skipped, not an error.
+
+    ## Known wire-contract gap: no `task_type` field yet
+
+    As verified against fulfillment-execution's actual
+    `TaskCompletedData` struct this session (`internal/adapters/outbound/kafka/publisher.go`
+    on its `feature/labor-performance-hooks` branch), the payload below is
+    the REAL, current shape — it does **not** carry a `task_type` field.
+    This service resolves TaskType as `""` (unclassified) for every
+    consumed event as a result; see `shared.ParseTaskTypeLenient`'s doc
+    comment in the code and the README's "Known gaps" section. A future
+    fulfillment-execution enrichment adding `task_type` to this payload
+    would let this service resolve it directly, with no other change
+    required on this side.
+
+    ## Graceful degradation on an older payload
+
+    `associate_id` and `duration_seconds` are the two fields added by
+    fulfillment-execution's `feature/labor-performance-hooks` change. Both
+    are optional on the wire (`omitempty` on the publisher's own struct):
+    an older payload that predates that enrichment simply omits them, and
+    this service's JSON unmarshaling already degrades those absent fields
+    to their Go zero values (`""` / `0`) — exactly the "no checked-in
+    occupant" / "unmeasurable duration" business facts this service's own
+    aggregate invariants already model, not an error.
+  contact:
+    name: Labor Performance Team
+    url: https://github.com/claudioed/labor-performance
+    email: labor-performance@warehouse-systems.internal
+  license:
+    name: MIT
+
+tags:
+  - name: labor-performance
+    description: The Labor Performance bounded context (Supporting subdomain).
+  - name: task
+    description: Events describing the Task aggregate lifecycle, owned by fulfillment-execution.
+
+servers:
+  production:
+    url: kafka.warehouse-systems.internal:9092
+    protocol: kafka
+    description: >-
+      Shared Kafka broker for warehouse-systems integration events. Locally,
+      a broker is available at localhost:9092 via
+      ~/warehouse-systems/docker-compose.kafka.yml.
+
+defaultContentType: application/json
+
+channels:
+  warehouse.fulfillment.events:
+    description: >-
+      The shared, fan-out topic owned by fulfillment-execution
+      (its `kafka.Topic` constant). This service subscribes to it under its
+      own consumer group and acts only on `TaskCompleted` messages.
+    subscribe:
+      operationId: consumeTaskCompleted
+      summary: Consume TaskCompleted events from fulfillment-execution.
+      description: >-
+        Feeds each TaskCompleted message into the RecordTaskPerformance use
+        case, which is idempotent on `event_id` and resolves whichever
+        LaborStandard was active for the task's type AS OF its
+        `occurred_at` timestamp (not "active right now"), so a possibly
+        out-of-order or replayed message is scored against the standard
+        genuinely in force when the task completed. Every other event type
+        on this topic is silently skipped.
+      tags:
+        - name: task
+      message:
+        $ref: "#/components/messages/TaskCompleted"
+
+components:
+  messages:
+    TaskCompleted:
+      name: TaskCompleted
+      title: Task Completed
+      summary: A station finished a claimed task; fulfillment-execution's fact.
+      description: >-
+        Raised by fulfillment-execution's Task aggregate when a station
+        completes a claimed task. This service consumes it to record a
+        TaskPerformance row scored against whatever LaborStandard was
+        active for the task's type at completion time.
+      contentType: application/json
+      tags:
+        - name: task
+      payload:
+        $ref: "#/components/schemas/TaskCompletedEnvelope"
+      examples:
+        - name: taskCompletedWithAssociateAndDuration
+          summary: >-
+            A PICK task completed by a checked-in associate, with a
+            measurable duration.
+          payload:
+            event_id: 4f1c2a7e-9d31-4a6b-8f0e-6b2c1d5e7a90
+            event_type: TaskCompleted
+            occurred_at: "2026-08-29T22:00:00Z"
+            source: fulfillment-execution
+            data:
+              task_id: task-10231
+              station_id: station-7
+              work_unit_id: order-88421-line-3
+              associate_id: assoc-4471
+              duration_seconds: 52
+        - name: taskCompletedNoOccupant
+          summary: >-
+            A task completed at a station with no checked-in occupant (for
+            example, a robot station). associate_id is omitted from the
+            wire, not sent as an empty string.
+          payload:
+            event_id: 8a3d6c11-52b7-4f0d-9c14-3e7a5b8d2f46
+            event_type: TaskCompleted
+            occurred_at: "2026-08-29T22:05:00Z"
+            source: fulfillment-execution
+            data:
+              task_id: task-10232
+              station_id: station-robot-1
+              work_unit_id: order-88422-line-1
+              duration_seconds: 40
+        - name: taskCompletedNoDuration
+          summary: >-
+            A task claimed before fulfillment-execution's claim-timestamp
+            migration, so no duration could be computed.
+            duration_seconds is omitted from the wire, not sent as 0 —
+            though this service treats an explicit 0 identically.
+          payload:
+            event_id: c25b9f83-7e64-4a19-b8d2-0f5a3c6e1b47
+            event_type: TaskCompleted
+            occurred_at: "2026-08-29T22:10:00Z"
+            source: fulfillment-execution
+            data:
+              task_id: task-10233
+              station_id: station-3
+              work_unit_id: order-88423-line-1
+              associate_id: assoc-4472
+
+  schemas:
+    TaskCompletedEnvelope:
+      type: object
+      title: Envelope + TaskCompleted data
+      required:
+        - event_id
+        - event_type
+        - occurred_at
+        - source
+        - data
+      properties:
+        event_id:
+          type: string
+          format: uuid
+          description: >-
+            Unique identifier for this event occurrence. This service's
+            de-duplication key for at-least-once redelivery.
+        event_type:
+          type: string
+          enum: ["TaskCompleted"]
+        occurred_at:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 timestamp of when the task actually completed —
+            resolved as `CompletedAt` on the recorded TaskPerformance, and
+            the instant this service resolves "which standard was active"
+            against.
+        source:
+          type: string
+          enum: ["fulfillment-execution"]
+        data:
+          type: object
+          required:
+            - task_id
+            - station_id
+            - work_unit_id
+          properties:
+            task_id:
+              type: string
+              description: >-
+                fulfillment-execution's Task id, treated as an opaque
+                foreign reference this context does not validate further.
+            station_id:
+              type: string
+              description: Identifier of the station that completed the task.
+            work_unit_id:
+              type: string
+              description: >-
+                wes-work-planning's WorkUnit id for the completed task. Not
+                currently used by this service.
+            associate_id:
+              type: string
+              description: >-
+                OPTIONAL. The occupant of the completing station at
+                completion time. Absent — not an empty string — when the
+                station had no checked-in occupant (e.g. a robot station),
+                or on a pre-enrichment payload. This service treats an
+                absent field identically to an empty string: the resulting
+                TaskPerformance is recorded with `AssociateId=""` and is
+                excluded from any per-associate scorecard while still
+                counting in fleet-wide TaskType performance.
+              example: assoc-4471
+            duration_seconds:
+              type: integer
+              format: int64
+              description: >-
+                OPTIONAL. Elapsed time between the task's claim and its
+                completion. Absent — not `0` — when no claim timestamp
+                existed to compute it from (e.g. a task claimed before
+                fulfillment-execution's claim-timestamp migration), or on a
+                pre-enrichment payload. This service treats an absent field
+                identically to `0`: the resulting TaskPerformance is
+                recorded with `ActualSeconds=0` and `EfficiencyPct=null`,
+                a real, expected "unmeasurable" business fact, not an
+                error.
+              example: 52

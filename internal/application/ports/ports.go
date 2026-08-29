@@ -1,0 +1,108 @@
+// Package ports declares the outbound interfaces the application layer
+// depends on: repositories for each aggregate, an event publisher, and a
+// clock. Adapters implement these; the application layer never imports an
+// adapter package.
+package ports
+
+import (
+	"context"
+	"time"
+
+	"github.com/claudioed/labor-performance/internal/domain/performance"
+	"github.com/claudioed/labor-performance/internal/domain/shared"
+	"github.com/claudioed/labor-performance/internal/domain/standard"
+)
+
+// StandardRepo persists and loads LaborStandard aggregates. History is
+// append-only: Save upserts one record by id, and FindActiveAsOf resolves
+// which record (if any) was active for a TaskType at a given instant —
+// "active as of t", not "active right now" — since a possibly-replayed
+// Kafka message must be scored against the standard that was genuinely
+// active when the task completed, not whatever is active at ingestion
+// time.
+type StandardRepo interface {
+	Save(ctx context.Context, s *standard.LaborStandard) error
+	// FindActiveAsOf returns the LaborStandard for taskType whose
+	// effective range covers t ([EffectiveFrom, EffectiveTo)), or
+	// (nil, nil) if none does.
+	FindActiveAsOf(ctx context.Context, taskType shared.TaskType, t time.Time) (*standard.LaborStandard, error)
+	// FindCurrentlyActive returns the LaborStandard for taskType that is
+	// active right now (EffectiveTo nil), or (nil, nil) if none is.
+	FindCurrentlyActive(ctx context.Context, taskType shared.TaskType) (*standard.LaborStandard, error)
+	NextID(ctx context.Context) (shared.StandardId, error)
+}
+
+// PerformanceRepo persists and loads TaskPerformance aggregates, and
+// answers the read-model queries GetAssociateScorecard/
+// GetTaskTypePerformance are built on.
+type PerformanceRepo interface {
+	// Save persists p. Idempotency on eventId is enforced by the
+	// application layer via ProcessedEvents before Save is ever called —
+	// Save itself does not need to re-check.
+	Save(ctx context.Context, p *performance.TaskPerformance) error
+	// ExistsByAssociateID reports whether at least one TaskPerformance
+	// row has ever been recorded for associateId — the "have we ever
+	// seen this associate" check GetAssociateScorecard's 404 depends on,
+	// distinct from "do we have a numeric score for them".
+	ExistsByAssociateID(ctx context.Context, associateId shared.AssociateId) (bool, error)
+	// ScorecardFor returns the per-associate read model: task count,
+	// mean EfficiencyPct across rows that have one (nil if none do), and
+	// a per-TaskType breakdown. Rows with an empty AssociateId are never
+	// included in any scorecard.
+	ScorecardFor(ctx context.Context, associateId shared.AssociateId) (Scorecard, error)
+	// TaskTypePerformanceFor returns the fleet-wide read model across
+	// ALL associates for one TaskType: task count and mean EfficiencyPct
+	// across rows that have one. Includes rows with an empty
+	// AssociateId (e.g. robot-station completions), unlike ScorecardFor.
+	TaskTypePerformanceFor(ctx context.Context, taskType shared.TaskType) (TaskTypePerformance, error)
+}
+
+// Scorecard is the per-associate read model — a projection over
+// TaskPerformance rows, not a stored aggregate.
+type Scorecard struct {
+	AssociateId       shared.AssociateId
+	TaskCount         int
+	MeanEfficiencyPct *float64
+	ByTaskType        map[shared.TaskType]TaskTypeBreakdown
+}
+
+// TaskTypeBreakdown is one TaskType's slice of a Scorecard.
+type TaskTypeBreakdown struct {
+	TaskCount         int
+	MeanEfficiencyPct *float64
+}
+
+// TaskTypePerformance is the fleet-wide (all-associates) read model for
+// one TaskType.
+type TaskTypePerformance struct {
+	TaskType          shared.TaskType
+	TaskCount         int
+	MeanEfficiencyPct *float64
+}
+
+// EventPublisher publishes domain events raised by aggregates. v1 ships a
+// log publisher only — see SPEC.md's "Domain events" section.
+type EventPublisher interface {
+	Publish(ctx context.Context, events ...shared.DomainEvent) error
+}
+
+// ProcessedEvents is the idempotency gate for at-least-once Kafka
+// consumption of TaskCompleted, keyed on the message's event_id rather
+// than TaskId (which could in principle be reused after a very long
+// time). Unlike workforce-management's identically-shaped port — which
+// gates only its analytics side-projection — this service's OLTP write
+// path depends on it directly, since consuming TaskCompleted IS this
+// service's whole job (see ADR
+// 0003-kafka-choreography-consumer-of-fulfillment-execution.md).
+type ProcessedEvents interface {
+	// MarkProcessed records eventId if absent, returning true iff this
+	// call newly recorded it (so the caller should process the event)
+	// and false if it was already seen (a duplicate to skip).
+	MarkProcessed(ctx context.Context, eventId string) (bool, error)
+}
+
+// Clock supplies the current time so domain/application logic never calls
+// time.Now() directly.
+type Clock interface {
+	Now() time.Time
+}
