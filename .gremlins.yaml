@@ -22,16 +22,24 @@ unleash:
   threshold:
     # NOTE: gremlins fails when the measured value is <= the threshold
     # (internal/report/report.go), so a threshold must sit strictly BELOW the
-    # number we can meet today. Measured on 2026-08-29 (this fleet-parity PR,
-    # this service's first-ever mutation-testing run): efficacy 100.00% and
-    # mutator coverage 100.00% on both ./internal/domain/performance (the
-    # fast blocking subset — the TaskPerformance aggregate: idempotency-
-    # adjacent invariants, the never-divide-by-zero EfficiencyPct
-    # computation, and immutability) and the exhaustive ./internal/domain
-    # run (11 mutants total: 8 in performance, 3 in standard — all killed,
-    # zero survivors, zero not-covered). 99 therefore locks in today's
-    # quality and fails the build the moment a single mutant survives — the
-    # same "gate just under what we already achieve" approach as the 90%
+    # number we can meet today. Measured on 2026-08-29 (ADR 0005's Trend/
+    # CoachingFlag feature): efficacy 100.00% and mutator coverage 100.00% on
+    # both ./internal/domain/performance (the fast blocking subset — the
+    # TaskPerformance aggregate's invariants plus ClassifyTrend/
+    # DetectCoachingFlag) and the exhaustive ./internal/domain run (29
+    # mutants total across performance and standard — all killed, zero
+    # survivors, zero not-covered). 99 therefore locks in today's quality
+    # and fails the build the moment a single mutant survives — the same
+    # "gate just under what we already achieve" approach as the 90%
     # coverage gate in ci.yml and as inventory-storage's own .gremlins.yaml.
+    #
+    # One real gap found and fixed while adding ClassifyTrend: an
+    # expression-less `switch { case ...: ... }` form showed 100% normal Go
+    # test coverage but gremlins reported 2 of its 3 branches NOT COVERED —
+    # the mutation tool does not reliably instrument that switch form.
+    # Rewritten as if/else-if/return (the same pattern every other
+    # conditional in this package already used), and every mutant on those
+    # lines is now correctly KILLED. Worth remembering for any future
+    # switch{case bool-expr:} in this codebase.
     efficacy: 99
     mutant-coverage: 99

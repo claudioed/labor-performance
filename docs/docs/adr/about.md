@@ -62,6 +62,7 @@ Typos, broken links and formatting are of course fair game.
 | [0002](./0002-new-bounded-context-not-extension-of-workforce-or-fulfillment.md) | A new bounded context, not an extension of workforce-management or fulfillment-execution | Accepted |
 | [0003](./0003-kafka-choreography-consumer-of-fulfillment-execution.md) | Kafka choreography consumer of fulfillment-execution, no REST dependency | Accepted |
 | [0004](./0004-standard-frozen-at-completion-time-not-recomputed.md) | StandardSecondsAtCompletion is frozen at ingestion time, never recomputed | Accepted |
+| [0005](./0005-associate-trend-and-coaching-flag.md) | Associate Trend and CoachingFlag on the Scorecard read model | Accepted |
 
 Each of these reconstructs a decision that is actually visible in this
 repository's history, `CLAUDE.md` or code — none is a generic placeholder.

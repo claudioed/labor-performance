@@ -55,6 +55,15 @@ type PerformanceRepo interface {
 	// across rows that have one. Includes rows with an empty
 	// AssociateId (e.g. robot-station completions), unlike ScorecardFor.
 	TaskTypePerformanceFor(ctx context.Context, taskType shared.TaskType) (TaskTypePerformance, error)
+	// RecentByAssociateID returns associateId's most recent TaskPerformance
+	// rows, ordered NEWEST-FIRST (descending CompletedAt), capped at
+	// limit. Used by GetAssociateScorecard to compute a trend/coaching
+	// signal over a bounded recent window without loading every row this
+	// associate has ever had scored — an associate could accumulate
+	// thousands of rows over a long tenure, and the trend/coaching
+	// signal only ever needs a small recent slice, never the full
+	// history.
+	RecentByAssociateID(ctx context.Context, associateId shared.AssociateId, limit int) ([]*performance.TaskPerformance, error)
 }
 
 // Scorecard is the per-associate read model — a projection over
@@ -64,6 +73,18 @@ type Scorecard struct {
 	TaskCount         int
 	MeanEfficiencyPct *float64
 	ByTaskType        map[shared.TaskType]TaskTypeBreakdown
+	// Trend classifies this associate's recent scored performance
+	// against their all-time baseline (see
+	// performance.ClassifyTrend). Always present, never nil —
+	// TrendInsufficientData is itself a real value, not an absence.
+	Trend performance.TrendDirection
+	// CoachingFlag is true iff this associate's most recent 3 SCORED
+	// tasks were all below the coaching floor (see
+	// performance.DetectCoachingFlag) — a "this is worth a
+	// conversation" signal, never itself an automated action. Mirrors
+	// this context's "visibility, not enforcement" discipline (ADR
+	// 0002).
+	CoachingFlag bool
 }
 
 // TaskTypeBreakdown is one TaskType's slice of a Scorecard.

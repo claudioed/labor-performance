@@ -153,6 +153,8 @@ func toScorecardResponse(sc ports.Scorecard) scorecardResponse {
 		TaskCount:         sc.TaskCount,
 		MeanEfficiencyPct: sc.MeanEfficiencyPct,
 		ByTaskType:        byType,
+		Trend:             string(sc.Trend),
+		CoachingFlag:      sc.CoachingFlag,
 	}
 }
 

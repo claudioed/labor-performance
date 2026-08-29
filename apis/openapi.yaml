@@ -224,6 +224,22 @@ components:
           type: object
           additionalProperties:
             $ref: "#/components/schemas/TaskTypeBreakdown"
+        trend:
+          type: string
+          enum: [IMPROVING, DECLINING, STABLE, INSUFFICIENT_DATA]
+          description: >
+            How this associate's most recent scored tasks (up to the
+            last 10) compare to their all-time mean EfficiencyPct.
+            INSUFFICIENT_DATA when fewer than 3 recent tasks were
+            scored -- always present, never omitted, since
+            "not enough data yet" is itself a meaningful signal.
+        coachingFlag:
+          type: boolean
+          description: >
+            True iff this associate's 3 most recent SCORED tasks were
+            all below the coaching floor (85% efficiency). Visibility
+            only -- this service never automates coaching, pay, or
+            task-claim decisions from this signal.
     TaskTypePerformance:
       type: object
       properties:
