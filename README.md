@@ -276,8 +276,13 @@ coaching, pay, or task-claim decisions from either field.
 ```bash
 curl -s localhost:8080/task-types/PICK/performance
 # 200 OK — always 200, including a zero-count result for a never-seen type:
-# {"taskType":"PICK","taskCount":42,"meanEfficiencyPct":88.7}
+# {"taskType":"PICK","taskCount":42,"meanEfficiencyPct":88.7,"meanActualSeconds":39.4}
 ```
+
+`meanActualSeconds` is a real measured rate, independent of
+`meanEfficiencyPct` — populated even when no `LaborStandard` has ever
+been defined for this TaskType. See
+[ADR 0006](docs/docs/adr/0006-mean-actual-seconds-independent-of-standard.md).
 
 ## Quality gate
 

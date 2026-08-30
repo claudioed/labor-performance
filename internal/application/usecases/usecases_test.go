@@ -352,6 +352,76 @@ func TestGetTaskTypePerformance_NeverSeenReturnsZeroNotError(t *testing.T) {
 	if tp.TaskCount != 0 || tp.MeanEfficiencyPct != nil {
 		t.Fatalf("unexpected non-zero result for never-seen task type: %+v", tp)
 	}
+	if tp.MeanActualSeconds != nil {
+		t.Fatalf("MeanActualSeconds = %v, want nil for never-seen task type", *tp.MeanActualSeconds)
+	}
+}
+
+// TestGetTaskTypePerformance_MeanActualSeconds_IndependentOfStandard proves
+// MeanActualSeconds is populated even when NO LaborStandard was ever
+// defined (so MeanEfficiencyPct is nil for every row) -- the real-measured-
+// rate field must not require a standard to exist, unlike EfficiencyPct.
+func TestGetTaskTypePerformance_MeanActualSeconds_IndependentOfStandard(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	// Deliberately no DefineStandard call.
+	for i, secs := range []int64{40, 50, 60} {
+		if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+			KafkaEventId: fmt.Sprintf("evt-%d", i), TaskId: fmt.Sprintf("task-%d", i), TaskType: shared.Pick,
+			ActualSeconds: secs, CompletedAt: baseTime.Add(time.Duration(i) * time.Hour),
+		}); err != nil {
+			t.Fatalf("RecordTaskPerformance[%d]: %v", i, err)
+		}
+	}
+
+	tp, err := f.getTaskTypePerformance.Execute(ctx, shared.Pick)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if tp.MeanEfficiencyPct != nil {
+		t.Fatalf("MeanEfficiencyPct = %v, want nil (no standard was ever defined)", *tp.MeanEfficiencyPct)
+	}
+	if tp.MeanActualSeconds == nil {
+		t.Fatal("MeanActualSeconds must be populated even with no standard defined")
+	}
+	if got, want := *tp.MeanActualSeconds, 50.0; got != want {
+		t.Fatalf("MeanActualSeconds = %v, want %v (mean of 40,50,60)", got, want)
+	}
+}
+
+// TestGetTaskTypePerformance_MeanActualSeconds_ExcludesUnmeasurableRows
+// proves a row with ActualSeconds<=0 (unmeasurable) is excluded from the
+// MeanActualSeconds average, exactly like it's excluded from
+// MeanEfficiencyPct.
+func TestGetTaskTypePerformance_MeanActualSeconds_ExcludesUnmeasurableRows(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-measured", TaskId: "task-measured", TaskType: shared.Pack,
+		ActualSeconds: 60, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("RecordTaskPerformance(measured): %v", err)
+	}
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-unmeasurable", TaskId: "task-unmeasurable", TaskType: shared.Pack,
+		ActualSeconds: 0, CompletedAt: baseTime.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("RecordTaskPerformance(unmeasurable): %v", err)
+	}
+
+	tp, err := f.getTaskTypePerformance.Execute(ctx, shared.Pack)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if tp.TaskCount != 2 {
+		t.Fatalf("TaskCount = %d, want 2 (both rows count, even the unmeasurable one)", tp.TaskCount)
+	}
+	if tp.MeanActualSeconds == nil {
+		t.Fatal("MeanActualSeconds must be populated from the one measurable row")
+	}
+	if got, want := *tp.MeanActualSeconds, 60.0; got != want {
+		t.Fatalf("MeanActualSeconds = %v, want %v (the unmeasurable row must be excluded from the average, not counted as 0)", got, want)
+	}
 }
 
 // TestGetAssociateScorecard_Trend_InsufficientDataBelowThreeScoredTasks

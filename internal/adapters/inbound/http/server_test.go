@@ -311,6 +311,7 @@ type taskTypePerformanceBody struct {
 	TaskType          string   `json:"taskType"`
 	TaskCount         int      `json:"taskCount"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
+	MeanActualSeconds *float64 `json:"meanActualSeconds"`
 }
 
 func TestGetTaskTypePerformance(t *testing.T) {
@@ -331,6 +332,12 @@ func TestGetTaskTypePerformance(t *testing.T) {
 		}
 		if body.TaskCount != 1 {
 			t.Fatalf("TaskCount = %d, want 1", body.TaskCount)
+		}
+		if body.MeanActualSeconds == nil {
+			t.Fatal("MeanActualSeconds must be populated")
+		}
+		if *body.MeanActualSeconds != 50 {
+			t.Fatalf("MeanActualSeconds = %v, want 50", *body.MeanActualSeconds)
 		}
 	})
 

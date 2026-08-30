@@ -251,6 +251,17 @@ components:
           type: number
           format: double
           nullable: true
+        meanActualSeconds:
+          type: number
+          format: double
+          nullable: true
+          description: >
+            The real measured mean duration (seconds) for this TaskType,
+            across every recorded row with a positive ActualSeconds --
+            independent of whether an engineered labor standard exists to
+            compare it against. Null iff no measurable row has ever been
+            recorded for this TaskType. Distinct from meanEfficiencyPct,
+            which additionally requires an active standard.
     ProblemDetails:
       type: object
       description: RFC 7807 Problem Details for HTTP APIs.

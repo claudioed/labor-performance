@@ -50,6 +50,11 @@ type taskTypePerformanceResponse struct {
 	TaskType          string   `json:"taskType"`
 	TaskCount         int      `json:"taskCount"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
+	// MeanActualSeconds is the real measured mean duration for this
+	// TaskType, independent of whether an engineered standard exists.
+	// See ports.TaskTypePerformance's doc comment for the full
+	// distinction from MeanEfficiencyPct.
+	MeanActualSeconds *float64 `json:"meanActualSeconds"`
 }
 
 // problemDetails is the RFC 7807 (Problem Details for HTTP APIs) response

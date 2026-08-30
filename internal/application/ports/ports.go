@@ -99,6 +99,20 @@ type TaskTypePerformance struct {
 	TaskType          shared.TaskType
 	TaskCount         int
 	MeanEfficiencyPct *float64
+	// MeanActualSeconds is the mean ActualSeconds across recorded rows
+	// for this TaskType whose ActualSeconds is > 0 (rows with
+	// ActualSeconds<=0 — unmeasurable, e.g. a pre-migration task with
+	// no ClaimedAt — are excluded, exactly like EfficiencyPct excludes
+	// them). This is a REAL measured rate, independent of whether an
+	// engineered standard exists to compare it against — distinct from
+	// MeanEfficiencyPct, which additionally requires an active standard
+	// to have existed at completion time. Consumers wanting an actual
+	// observed pace (e.g. workforce-management's ProposePathPlan
+	// closing the loop on a previously hand-guessed plannedRate) want
+	// THIS field, not MeanEfficiencyPct. Nil iff no row with a positive
+	// ActualSeconds was ever recorded for this TaskType — never a
+	// fabricated number.
+	MeanActualSeconds *float64
 }
 
 // EventPublisher publishes domain events raised by aggregates. v1 ships a
