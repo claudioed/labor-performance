@@ -94,8 +94,10 @@ func (r *PerformanceRepo) TaskTypePerformanceFor(_ context.Context, taskType sha
 	defer r.mu.RUnlock()
 
 	out := ports.TaskTypePerformance{TaskType: taskType}
-	var sum float64
-	var scored int
+	var effSum float64
+	var effScored int
+	var actualSum float64
+	var actualMeasured int
 
 	for _, p := range r.byTID {
 		if p.TaskType() != taskType {
@@ -103,14 +105,22 @@ func (r *PerformanceRepo) TaskTypePerformanceFor(_ context.Context, taskType sha
 		}
 		out.TaskCount++
 		if p.EfficiencyPct() != nil {
-			sum += *p.EfficiencyPct()
-			scored++
+			effSum += *p.EfficiencyPct()
+			effScored++
+		}
+		if p.ActualSeconds() > 0 {
+			actualSum += float64(p.ActualSeconds())
+			actualMeasured++
 		}
 	}
 
-	if scored > 0 {
-		mean := sum / float64(scored)
+	if effScored > 0 {
+		mean := effSum / float64(effScored)
 		out.MeanEfficiencyPct = &mean
+	}
+	if actualMeasured > 0 {
+		mean := actualSum / float64(actualMeasured)
+		out.MeanActualSeconds = &mean
 	}
 
 	return out, nil

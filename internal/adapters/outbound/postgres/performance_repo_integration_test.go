@@ -77,6 +77,9 @@ func TestPostgres_PerformanceRoundTrip(t *testing.T) {
 	if tt.TaskCount < 1 {
 		t.Fatalf("expected TaskCount>=1 for PICK, got %d", tt.TaskCount)
 	}
+	if tt.MeanActualSeconds == nil {
+		t.Fatal("expected a non-nil MeanActualSeconds -- the row saved above has ActualSeconds=52")
+	}
 }
 
 func TestPostgres_ProcessedEventIdempotency(t *testing.T) {

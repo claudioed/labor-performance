@@ -83,10 +83,10 @@ func (r *PerformanceRepo) ScorecardFor(ctx context.Context, associateId shared.A
 func (r *PerformanceRepo) TaskTypePerformanceFor(ctx context.Context, taskType shared.TaskType) (ports.TaskTypePerformance, error) {
 	out := ports.TaskTypePerformance{TaskType: taskType}
 	err := r.pool.QueryRow(ctx, `
-		SELECT COUNT(*), AVG(efficiency_pct)
+		SELECT COUNT(*), AVG(efficiency_pct), AVG(actual_seconds) FILTER (WHERE actual_seconds > 0)
 		FROM task_performances
 		WHERE task_type = $1
-	`, string(taskType)).Scan(&out.TaskCount, &out.MeanEfficiencyPct)
+	`, string(taskType)).Scan(&out.TaskCount, &out.MeanEfficiencyPct, &out.MeanActualSeconds)
 	return out, err
 }
 

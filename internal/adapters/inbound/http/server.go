@@ -121,6 +121,7 @@ func (s *Server) handleGetTaskTypePerformance(w http.ResponseWriter, r *http.Req
 		TaskType:          string(tp.TaskType),
 		TaskCount:         tp.TaskCount,
 		MeanEfficiencyPct: tp.MeanEfficiencyPct,
+		MeanActualSeconds: tp.MeanActualSeconds,
 	})
 }
 
