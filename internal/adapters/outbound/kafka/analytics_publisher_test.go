@@ -1,0 +1,289 @@
+package kafka
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+	"time"
+
+	kafkago "github.com/segmentio/kafka-go"
+
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/domain/shared"
+)
+
+// recordingWriter captures published messages instead of talking to a
+// broker.
+type recordingWriter struct {
+	msgs     []kafkago.Message
+	failWith error
+}
+
+func (w *recordingWriter) WriteMessages(_ context.Context, msgs ...kafkago.Message) error {
+	if w.failWith != nil {
+		return w.failWith
+	}
+	w.msgs = append(w.msgs, msgs...)
+	return nil
+}
+
+// seqIDs mints predictable envelope event ids so assertions can name
+// them.
+func seqIDs() func() string {
+	n := 0
+	return func() string {
+		n++
+		return "evt-" + string(rune('0'+n))
+	}
+}
+
+func newTestPublisher() (*AnalyticsPublisher, *recordingWriter) {
+	w := &recordingWriter{}
+	return &AnalyticsPublisher{Writer: w, NewID: seqIDs()}, w
+}
+
+func at(h int) time.Time { return time.Date(2026, 9, 5, h, 0, 0, 0, time.UTC) }
+
+func decode(t *testing.T, msg kafkago.Message) (envelope.AnalyticsEnvelope, map[string]any) {
+	t.Helper()
+	var env envelope.AnalyticsEnvelope
+	if err := json.Unmarshal(msg.Value, &env); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		t.Fatalf("decode data: %v", err)
+	}
+	return env, data
+}
+
+func TestAnalyticsPublisherPublishesEachDomainEvent(t *testing.T) {
+	pct := 86.5
+
+	tests := []struct {
+		name          string
+		event         shared.DomainEvent
+		wantEventType string
+		wantKey       string
+		assertData    func(t *testing.T, data map[string]any)
+	}{
+		{
+			name:          "LaborStandardDefined",
+			event:         shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9)),
+			wantEventType: envelope.EventTypeLaborStandardDefined,
+			wantKey:       "PICK",
+			assertData: func(t *testing.T, data map[string]any) {
+				if data["expected_seconds"] != float64(45) {
+					t.Errorf("expected_seconds = %v, want 45", data["expected_seconds"])
+				}
+				if data["task_type"] != "PICK" {
+					t.Errorf("task_type = %v, want PICK", data["task_type"])
+				}
+			},
+		},
+		{
+			name:          "LaborStandardRevised",
+			event:         shared.NewLaborStandardRevised(at(10), "std-2", shared.Pick, 45, 40, at(10)),
+			wantEventType: envelope.EventTypeLaborStandardRevised,
+			wantKey:       "PICK",
+			assertData: func(t *testing.T, data map[string]any) {
+				if data["previous_expected_seconds"] != float64(45) {
+					t.Errorf("previous_expected_seconds = %v, want 45", data["previous_expected_seconds"])
+				}
+				if data["expected_seconds"] != float64(40) {
+					t.Errorf("expected_seconds = %v, want 40", data["expected_seconds"])
+				}
+			},
+		},
+		{
+			name: "TaskPerformanceRecorded",
+			event: shared.NewTaskPerformanceRecorded(
+				at(11), "task-1", shared.AssociateId("assoc-1"), shared.Pack, 52, &pct, at(9)),
+			wantEventType: envelope.EventTypeTaskPerformanceRecorded,
+			wantKey:       "PACK",
+			assertData: func(t *testing.T, data map[string]any) {
+				if data["task_id"] != "task-1" {
+					t.Errorf("task_id = %v, want task-1", data["task_id"])
+				}
+				if data["efficiency_pct"] != 86.5 {
+					t.Errorf("efficiency_pct = %v, want 86.5", data["efficiency_pct"])
+				}
+				if data["actual_seconds"] != float64(52) {
+					t.Errorf("actual_seconds = %v, want 52", data["actual_seconds"])
+				}
+				// completed_at is the business time and must travel
+				// distinctly from the envelope's occurred_at.
+				if data["completed_at"] != at(9).Format(time.RFC3339) {
+					t.Errorf("completed_at = %v, want %v", data["completed_at"], at(9).Format(time.RFC3339))
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, w := newTestPublisher()
+
+			if err := p.Publish(context.Background(), tc.event); err != nil {
+				t.Fatalf("Publish: %v", err)
+			}
+			if len(w.msgs) != 1 {
+				t.Fatalf("got %d messages, want 1", len(w.msgs))
+			}
+
+			env, data := decode(t, w.msgs[0])
+			if env.EventType != tc.wantEventType {
+				t.Errorf("event_type = %q, want %q", env.EventType, tc.wantEventType)
+			}
+			if env.Source != envelope.Source {
+				t.Errorf("source = %q, want %q", env.Source, envelope.Source)
+			}
+			if env.SchemaVersion != envelope.AnalyticsSchemaVersion {
+				t.Errorf("schema_version = %d, want %d", env.SchemaVersion, envelope.AnalyticsSchemaVersion)
+			}
+			if env.EventId == "" {
+				t.Error("event_id is empty; it is the projection's idempotency key")
+			}
+			if !env.OccurredAt.Equal(tc.event.OccurredAt()) {
+				t.Errorf("occurred_at = %v, want %v", env.OccurredAt, tc.event.OccurredAt())
+			}
+			if got := string(w.msgs[0].Key); got != tc.wantKey {
+				t.Errorf("partition key = %q, want %q", got, tc.wantKey)
+			}
+			tc.assertData(t, data)
+		})
+	}
+}
+
+func TestAnalyticsPublisherPreservesNilEfficiency(t *testing.T) {
+	p, w := newTestPublisher()
+
+	// An unscorable task. The nil must reach the wire as JSON null so
+	// the projector can tell "unscorable" from "0% efficient".
+	event := shared.NewTaskPerformanceRecorded(
+		at(9), "task-1", shared.AssociateId(""), shared.TaskType(""), 0, nil, at(9))
+
+	if err := p.Publish(context.Background(), event); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	_, data := decode(t, w.msgs[0])
+	v, present := data["efficiency_pct"]
+	if !present {
+		t.Fatal("efficiency_pct is absent from the payload; it must be present as an explicit null")
+	}
+	if v != nil {
+		t.Errorf("efficiency_pct = %v, want null", v)
+	}
+	if data["associate_id"] != "" {
+		t.Errorf("associate_id = %v, want the empty robot-station value", data["associate_id"])
+	}
+}
+
+func TestAnalyticsPublisherMintsAUniqueEventIdPerMessage(t *testing.T) {
+	p, w := newTestPublisher()
+
+	// Two events for the SAME task type: their envelope event ids must
+	// still differ, since event_id — not task id or task type — is the
+	// projection's dedup key.
+	err := p.Publish(context.Background(),
+		shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9)),
+		shared.NewLaborStandardRevised(at(10), "std-2", shared.Pick, 45, 40, at(10)),
+	)
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if len(w.msgs) != 2 {
+		t.Fatalf("got %d messages, want 2", len(w.msgs))
+	}
+
+	first, _ := decode(t, w.msgs[0])
+	second, _ := decode(t, w.msgs[1])
+	if first.EventId == second.EventId {
+		t.Errorf("both messages carry event_id %q; a shared id would make the projector drop one", first.EventId)
+	}
+}
+
+func TestAnalyticsPublisherSkipsEventsOutsideTheContract(t *testing.T) {
+	p, w := newTestPublisher()
+
+	if err := p.Publish(context.Background(), unknownEvent{}); err != nil {
+		t.Fatalf("an event outside the analytics contract must be skipped, not an error: %v", err)
+	}
+	if len(w.msgs) != 0 {
+		t.Errorf("got %d messages, want 0", len(w.msgs))
+	}
+}
+
+func TestAnalyticsPublisherPropagatesWriteErrors(t *testing.T) {
+	w := &recordingWriter{failWith: errors.New("broker down")}
+	p := &AnalyticsPublisher{Writer: w, NewID: seqIDs()}
+
+	err := p.Publish(context.Background(), shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9)))
+	if err == nil {
+		t.Fatal("want the writer's error to surface")
+	}
+}
+
+func TestAnalyticsPublisherInjectsTraceHeaders(t *testing.T) {
+	p, w := newTestPublisher()
+
+	if err := p.Publish(context.Background(), shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9))); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	// With no global propagator configured in a unit test the header
+	// slice is legitimately empty; what must hold is that the message
+	// carries a non-nil header slice for the propagator to write into.
+	if w.msgs[0].Headers == nil {
+		t.Error("message headers are nil; the trace propagator has nowhere to inject")
+	}
+}
+
+func TestFanOutPublisher(t *testing.T) {
+	event := shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9))
+
+	t.Run("forwards to every publisher", func(t *testing.T) {
+		a, b := &countingPublisher{}, &countingPublisher{}
+		if err := NewFanOutPublisher(a, b).Publish(context.Background(), event); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+		if a.count != 1 || b.count != 1 {
+			t.Errorf("publish counts = %d, %d; want 1, 1", a.count, b.count)
+		}
+	})
+
+	t.Run("is fail-fast in publisher order", func(t *testing.T) {
+		boom := errors.New("boom")
+		failing := &countingPublisher{failWith: boom}
+		after := &countingPublisher{}
+
+		err := NewFanOutPublisher(failing, after).Publish(context.Background(), event)
+		if !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want %v", err, boom)
+		}
+		if after.count != 0 {
+			t.Error("a later publisher ran after an earlier one failed; the fan-out must stop")
+		}
+	})
+}
+
+type countingPublisher struct {
+	count    int
+	failWith error
+}
+
+func (p *countingPublisher) Publish(_ context.Context, events ...shared.DomainEvent) error {
+	if p.failWith != nil {
+		return p.failWith
+	}
+	p.count += len(events)
+	return nil
+}
+
+// unknownEvent is a DomainEvent this adapter has no analytics mapping
+// for, standing in for any future domain event.
+type unknownEvent struct{}
+
+func (unknownEvent) EventName() string     { return "SomethingElseHappened" }
+func (unknownEvent) OccurredAt() time.Time { return at(9) }

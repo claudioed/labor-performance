@@ -64,7 +64,7 @@ jobs:
           set -euo pipefail
           go test ./... -race \
             -coverprofile=coverage.out \
-            -coverpkg=./internal/domain/...,./internal/application/...
+            -coverpkg=./internal/domain/...,./internal/application/...,./internal/analytics/...
 
       - name: Coverage gate
         env:
@@ -174,8 +174,13 @@ jobs:
           node-version: "20"
       - name: Install Spectral
         run: npm install -g @stoplight/spectral-cli
-      - name: Lint OpenAPI spec
+      - name: Lint OpenAPI spec (OLTP API)
         run: spectral lint apis/openapi.yaml --ruleset .spectral.yaml --fail-severity=warn
+      - name: Lint OpenAPI spec (reports API)
+        # The analytical data product's read-only surface is a SEPARATE
+        # spec because it is served by a separate binary on a separate
+        # port against a separate database (ADR 0007).
+        run: spectral lint apis/openapi-reports.yaml --ruleset .spectral.yaml --fail-severity=warn
       - name: Lint AsyncAPI spec
         run: spectral lint apis/asyncapi.yaml --ruleset .spectral.asyncapi.yaml --fail-severity=warn
 
