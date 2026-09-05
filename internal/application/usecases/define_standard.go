@@ -18,6 +18,10 @@ type DefineStandard struct {
 	Standards ports.StandardRepo
 	Events    ports.EventPublisher
 	Clock     ports.Clock
+	// Metrics records the labor_performance.standards.defined business
+	// counter (fleet-standard-metrics ADR, Tier 2), split by outcome
+	// (accepted/rejected). Nil is a valid "not instrumented" value.
+	Metrics ports.StandardMetrics
 }
 
 func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType, expectedSeconds int64) (*standard.LaborStandard, error) {
@@ -35,6 +39,9 @@ func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType,
 
 	next, err := standard.New(id, taskType, expectedSeconds, now)
 	if err != nil {
+		if uc.Metrics != nil {
+			uc.Metrics.StandardDefinitionRejected(ctx)
+		}
 		return nil, err
 	}
 
@@ -57,6 +64,10 @@ func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType,
 		if err := uc.Events.Publish(ctx, shared.NewLaborStandardDefined(now, id, taskType, expectedSeconds, now)); err != nil {
 			return nil, err
 		}
+	}
+
+	if uc.Metrics != nil {
+		uc.Metrics.StandardDefinitionAccepted(ctx)
 	}
 
 	return next, nil

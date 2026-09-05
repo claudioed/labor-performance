@@ -11,14 +11,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/riandyrn/otelchi"
+	otelchimetric "github.com/riandyrn/otelchi/metric"
 
 	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 )
 
-// DefaultServiceName labels this service in logs when the caller does not
-// supply one.
+// DefaultServiceName labels this service in logs, spans and metrics when
+// the caller does not supply one. It matches the OTel resource's
+// service.name.
 const DefaultServiceName = "labor-performance"
 
 // Server holds every use case the HTTP adapter depends on.
@@ -30,14 +33,29 @@ type Server struct {
 }
 
 // NewRouter builds the chi router for every endpoint in CLAUDE.md's REST
-// API. A nil logger defaults to slog.Default().
-func NewRouter(s *Server, logger *slog.Logger) http.Handler {
+// API. A nil logger defaults to slog.Default(); an empty serviceName
+// defaults to DefaultServiceName.
+//
+// Middleware order matters here (fleet-standard-metrics ADR, Tier 1 item
+// 2): otelchi runs before RequestLogger so the request context already
+// carries a span by the time a line is logged, which is what lets the
+// telemetry slog handler stamp trace_id/span_id onto it. WithChiRoutes
+// resolves the route pattern up front, so spans/metrics are labeled
+// "/standards/{taskType}" rather than one distinct name per task type.
+func NewRouter(s *Server, logger *slog.Logger, serviceName string) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if serviceName == "" {
+		serviceName = DefaultServiceName
 	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
+	r.Use(otelchi.Middleware(serviceName, otelchi.WithChiRoutes(r)))
+	// Emits http.server.request.duration (seconds) per OTel HTTP semantic
+	// conventions; no hand-rolled histogram needed.
+	r.Use(otelchimetric.NewServerRequestDuration(otelchimetric.NewBaseConfig(serviceName)))
 	r.Use(RequestLogger(logger))
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware())

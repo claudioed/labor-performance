@@ -80,6 +80,11 @@ func run() error {
 	defer closePublisher()
 	clock := memory.SystemClock{}
 
+	standardMetrics, err := telemetry.NewStandardMetrics()
+	if err != nil {
+		return err
+	}
+
 	recordTaskPerformance := &usecases.RecordTaskPerformance{
 		Performances: performances,
 		Standards:    standards,
@@ -89,7 +94,7 @@ func run() error {
 	}
 
 	server := &inboundhttp.Server{
-		DefineStandard:         &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock},
+		DefineStandard:         &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, Metrics: standardMetrics},
 		GetStandard:            &usecases.GetStandard{Standards: standards},
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: performances},
@@ -97,7 +102,7 @@ func run() error {
 
 	httpServer := &http.Server{
 		Addr:              httpAddr,
-		Handler:           inboundhttp.NewRouter(server, logger),
+		Handler:           inboundhttp.NewRouter(server, logger, serviceName),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
