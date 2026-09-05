@@ -119,3 +119,47 @@ readinessProbe:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# The "analytics report part" (ADR-0007): an additive read side built from
+# this service's own domain events, mirroring every sibling context's
+# analytics data-mesh shape. Disabled by default (enabled: false); the
+# reader's DSN falls back to the projector's DSN when left empty (fine for
+# local/dev, matching this fleet's documented single-role baseline).
+analytics:
+  enabled: false
+  # Directory (inside the image) of the analytical *.up.sql migrations the
+  # projector applies on start.
+  migrationsPath: "migrations/analytics"
+  database:
+    # The projector's read-write analytical DSN.
+    projectorUrl: ""
+    # The reader's DSN — a read-only role where possible; falls back to the
+    # projector DSN when empty (local/dev).
+    reportsUrl: ""
+    # Name of an existing Secret with ANALYTICS_DATABASE_URL and
+    # ANALYTICS_READER_DATABASE_URL keys. Takes precedence over the URLs above.
+    existingSecret: ""
+  projector:
+    replicaCount: 1
+    adminAddr: ":8091"
+    resources:
+      limits:
+        cpu: 500m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+  reports:
+    replicaCount: 1
+    httpAddr: ":8092"
+    service:
+      type: ClusterIP
+      port: 80
+      targetPort: 8092
+    resources:
+      limits:
+        cpu: 500m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
