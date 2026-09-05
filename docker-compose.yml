@@ -16,5 +16,29 @@ services:
       timeout: 5s
       retries: 10
 
+  # The ANALYTICAL database for the data product (ADR 0007) — a separate
+  # database with separate credentials, written only by cmd/labor-projector
+  # and read (read-only) by cmd/labor-reports. Kept as its own container
+  # here so "analytics never contends with OLTP" is true locally too, not
+  # just in a deployed environment. The ANALYTICS_DATABASE_URL seam allows
+  # promoting it to a physically separate instance with no code change.
+  analytics-postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: labor_analytics
+      POSTGRES_PASSWORD: labor_analytics
+      POSTGRES_DB: labor_analytics
+    ports:
+      - "5436:5432"
+    volumes:
+      - labor_analytics_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U labor_analytics"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   labor_pg_data:
+  labor_analytics_pg_data:

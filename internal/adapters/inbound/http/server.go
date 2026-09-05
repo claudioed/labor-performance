@@ -199,15 +199,36 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 // section — but CORS ships now, matching the fleet's convention that CORS
 // is added alongside a service's first console-facing REST surface.
 func corsMiddleware() func(http.Handler) http.Handler {
-	origins := []string{"http://localhost:5173", "http://localhost:5187"}
-	if v := os.Getenv("CORS_ALLOWED_ORIGINS"); v != "" {
-		origins = strings.Split(v, ",")
-	}
 	return cors.Handler(cors.Options{
-		AllowedOrigins:   origins,
+		AllowedOrigins:   allowedOrigins(),
 		AllowedMethods:   []string{http.MethodGet, http.MethodPost},
 		AllowedHeaders:   []string{"Content-Type", "Authorization"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	})
+}
+
+// readOnlyCORSMiddleware is corsMiddleware for the reports reader
+// (cmd/labor-reports): same origin policy, but GET only. The reports
+// server has no write surface, so advertising POST in
+// Access-Control-Allow-Methods would be a claim that is simply untrue.
+func readOnlyCORSMiddleware() func(http.Handler) http.Handler {
+	return cors.Handler(cors.Options{
+		AllowedOrigins:   allowedOrigins(),
+		AllowedMethods:   []string{http.MethodGet},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		AllowCredentials: false,
+		MaxAge:           300,
+	})
+}
+
+// allowedOrigins resolves the browser origins permitted to call this
+// service, from CORS_ALLOWED_ORIGINS (comma-separated) or the local-dev
+// default. Shared by the OLTP and reports routers so the two servers can
+// never drift onto different origin policies.
+func allowedOrigins() []string {
+	if v := os.Getenv("CORS_ALLOWED_ORIGINS"); v != "" {
+		return strings.Split(v, ",")
+	}
+	return []string{"http://localhost:5173", "http://localhost:5187"}
 }
