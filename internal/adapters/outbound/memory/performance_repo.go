@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/claudioed/labor-performance/internal/application/ports"
@@ -93,8 +94,10 @@ func (r *PerformanceRepo) TaskTypePerformanceFor(_ context.Context, taskType sha
 	defer r.mu.RUnlock()
 
 	out := ports.TaskTypePerformance{TaskType: taskType}
-	var sum float64
-	var scored int
+	var effSum float64
+	var effScored int
+	var actualSum float64
+	var actualMeasured int
 
 	for _, p := range r.byTID {
 		if p.TaskType() != taskType {
@@ -102,15 +105,51 @@ func (r *PerformanceRepo) TaskTypePerformanceFor(_ context.Context, taskType sha
 		}
 		out.TaskCount++
 		if p.EfficiencyPct() != nil {
-			sum += *p.EfficiencyPct()
-			scored++
+			effSum += *p.EfficiencyPct()
+			effScored++
+		}
+		if p.ActualSeconds() > 0 {
+			actualSum += float64(p.ActualSeconds())
+			actualMeasured++
 		}
 	}
 
-	if scored > 0 {
-		mean := sum / float64(scored)
+	if effScored > 0 {
+		mean := effSum / float64(effScored)
 		out.MeanEfficiencyPct = &mean
+	}
+	if actualMeasured > 0 {
+		mean := actualSum / float64(actualMeasured)
+		out.MeanActualSeconds = &mean
 	}
 
 	return out, nil
+}
+
+// RecentByAssociateID returns associateId's most recent rows, ordered
+// newest-first (descending CompletedAt), capped at limit. byTID is
+// append-ordered (insertion order), NOT CompletedAt order — a Kafka
+// consumer could in principle deliver TaskCompleted events out of
+// CompletedAt order (though not out of eventId/ProcessedEvents order),
+// so this filters by associate then sorts by CompletedAt explicitly
+// rather than assuming insertion order already reflects it.
+func (r *PerformanceRepo) RecentByAssociateID(_ context.Context, associateId shared.AssociateId, limit int) ([]*performance.TaskPerformance, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	matches := make([]*performance.TaskPerformance, 0)
+	for _, p := range r.byTID {
+		if p.AssociateId() == associateId {
+			matches = append(matches, p)
+		}
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].CompletedAt().After(matches[j].CompletedAt())
+	})
+
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return matches, nil
 }

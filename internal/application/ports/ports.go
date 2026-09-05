@@ -55,6 +55,15 @@ type PerformanceRepo interface {
 	// across rows that have one. Includes rows with an empty
 	// AssociateId (e.g. robot-station completions), unlike ScorecardFor.
 	TaskTypePerformanceFor(ctx context.Context, taskType shared.TaskType) (TaskTypePerformance, error)
+	// RecentByAssociateID returns associateId's most recent TaskPerformance
+	// rows, ordered NEWEST-FIRST (descending CompletedAt), capped at
+	// limit. Used by GetAssociateScorecard to compute a trend/coaching
+	// signal over a bounded recent window without loading every row this
+	// associate has ever had scored — an associate could accumulate
+	// thousands of rows over a long tenure, and the trend/coaching
+	// signal only ever needs a small recent slice, never the full
+	// history.
+	RecentByAssociateID(ctx context.Context, associateId shared.AssociateId, limit int) ([]*performance.TaskPerformance, error)
 }
 
 // Scorecard is the per-associate read model — a projection over
@@ -64,6 +73,18 @@ type Scorecard struct {
 	TaskCount         int
 	MeanEfficiencyPct *float64
 	ByTaskType        map[shared.TaskType]TaskTypeBreakdown
+	// Trend classifies this associate's recent scored performance
+	// against their all-time baseline (see
+	// performance.ClassifyTrend). Always present, never nil —
+	// TrendInsufficientData is itself a real value, not an absence.
+	Trend performance.TrendDirection
+	// CoachingFlag is true iff this associate's most recent 3 SCORED
+	// tasks were all below the coaching floor (see
+	// performance.DetectCoachingFlag) — a "this is worth a
+	// conversation" signal, never itself an automated action. Mirrors
+	// this context's "visibility, not enforcement" discipline (ADR
+	// 0002).
+	CoachingFlag bool
 }
 
 // TaskTypeBreakdown is one TaskType's slice of a Scorecard.
@@ -78,6 +99,20 @@ type TaskTypePerformance struct {
 	TaskType          shared.TaskType
 	TaskCount         int
 	MeanEfficiencyPct *float64
+	// MeanActualSeconds is the mean ActualSeconds across recorded rows
+	// for this TaskType whose ActualSeconds is > 0 (rows with
+	// ActualSeconds<=0 — unmeasurable, e.g. a pre-migration task with
+	// no ClaimedAt — are excluded, exactly like EfficiencyPct excludes
+	// them). This is a REAL measured rate, independent of whether an
+	// engineered standard exists to compare it against — distinct from
+	// MeanEfficiencyPct, which additionally requires an active standard
+	// to have existed at completion time. Consumers wanting an actual
+	// observed pace (e.g. workforce-management's ProposePathPlan
+	// closing the loop on a previously hand-guessed plannedRate) want
+	// THIS field, not MeanEfficiencyPct. Nil iff no row with a positive
+	// ActualSeconds was ever recorded for this TaskType — never a
+	// fabricated number.
+	MeanActualSeconds *float64
 }
 
 // EventPublisher publishes domain events raised by aggregates. v1 ships a

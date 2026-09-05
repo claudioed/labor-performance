@@ -80,6 +80,31 @@ func Extract(ctx context.Context, msg *kafkago.Message) context.Context {
 	return otel.GetTextMapPropagator().Extract(ctx, NewHeaderCarrier(&msg.Headers))
 }
 
+// Inject writes the trace context active in ctx into headers, so the
+// consumer that later reads the message can make its consume span a child
+// of this publish span. Added alongside the analytics publisher
+// (ADR-0007): this service was consumer-only until it began publishing
+// its own domain events to its analytics topic.
+func Inject(ctx context.Context, headers *[]kafkago.Header) {
+	otel.GetTextMapPropagator().Inject(ctx, NewHeaderCarrier(headers))
+}
+
+// StartPublishSpan starts the producer-side span for topic, named
+// "kafka.publish <topic>" per the OTel messaging semantic conventions.
+func StartPublishSpan(ctx context.Context, topic string, extra ...attribute.KeyValue) (context.Context, trace.Span) {
+	attrs := append([]attribute.KeyValue{
+		semconv.MessagingSystemKafka,
+		semconv.MessagingOperationName("publish"),
+		semconv.MessagingOperationTypeSend,
+		semconv.MessagingDestinationName(topic),
+	}, extra...)
+
+	return otel.Tracer(TracerName).Start(ctx, "kafka.publish "+topic,
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(attrs...),
+	)
+}
+
 // StartConsumeSpan starts the consumer-side span for topic, named
 // "kafka.consume <topic>" per the OTel messaging semantic conventions.
 func StartConsumeSpan(ctx context.Context, topic string, extra ...attribute.KeyValue) (context.Context, trace.Span) {

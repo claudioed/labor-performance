@@ -20,6 +20,9 @@ defaults:
     shell: bash
 
 jobs:
+  # ============================================================
+  # CLASSIFICATION: LINTERS & STATIC ANALYSIS
+  # ============================================================
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -34,6 +37,9 @@ jobs:
           version: v2.13.1
           args: --timeout=5m
 
+  # ============================================================
+  # CLASSIFICATION: UNIT TESTING
+  # ============================================================
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -64,7 +70,7 @@ jobs:
           set -euo pipefail
           go test ./... -race \
             -coverprofile=coverage.out \
-            -coverpkg=./internal/domain/...,./internal/application/...
+            -coverpkg=./internal/domain/...,./internal/application/...,./internal/analytics/...
 
       - name: Coverage gate
         env:
@@ -84,6 +90,9 @@ jobs:
           name: coverage
           path: coverage.out
 
+  # ============================================================
+  # CLASSIFICATION: BEHAVIOR TESTING (BDD / Gherkin)
+  # ============================================================
   bdd:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -95,6 +104,9 @@ jobs:
       - name: Run BDD (godog/Gherkin) acceptance tests
         run: go test ./... -run TestFeatures -v
 
+  # ============================================================
+  # CLASSIFICATION: INTEGRATION TESTING
+  # ============================================================
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -137,6 +149,9 @@ jobs:
   # workers/timeout come from .gremlins.yaml, so this job, the scheduled
   # exhaustive `mutation` job below and `make mutation` all agree. The
   # exhaustive run stays in the `mutation` job.
+  # ============================================================
+  # CLASSIFICATION: TEST QUALITY (MUTATION TESTING, fast subset)
+  # ============================================================
   mutation-fast:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -164,6 +179,9 @@ jobs:
       - name: Mutation testing (domain layer)
         run: gremlins unleash ./internal/domain --workers 1 --timeout-coefficient 30
 
+  # ============================================================
+  # CLASSIFICATION: LINTERS & STATIC ANALYSIS (API contracts)
+  # ============================================================
   api-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -174,13 +192,21 @@ jobs:
           node-version: "20"
       - name: Install Spectral
         run: npm install -g @stoplight/spectral-cli
-      - name: Lint OpenAPI spec
+      - name: Lint OpenAPI spec (OLTP API)
         run: spectral lint apis/openapi.yaml --ruleset .spectral.yaml --fail-severity=warn
+      - name: Lint OpenAPI spec (reports API)
+        # The analytical data product's read-only surface is a SEPARATE
+        # spec because it is served by a separate binary on a separate
+        # port against a separate database (ADR 0007).
+        run: spectral lint apis/openapi-reports.yaml --ruleset .spectral.yaml --fail-severity=warn
       - name: Lint AsyncAPI spec
         run: spectral lint apis/asyncapi.yaml --ruleset .spectral.asyncapi.yaml --fail-severity=warn
 
   # Supply-chain sensor: known CVEs in the dependency graph and in the Go
   # stdlib version this module builds against.
+  # ============================================================
+  # CLASSIFICATION: SECURITY SCANNER (dependency / stdlib CVEs)
+  # ============================================================
   vuln:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -194,9 +220,15 @@ jobs:
       - name: govulncheck
         run: govulncheck ./...
 
+  # ============================================================
+  # CLASSIFICATION: PACKAGING VALIDATION (Helm chart)
+  # Runs ONLY for a pull_request targeting main -- validated pre-merge,
+  # never on develop pushes/PRs or on push-to-main (already validated).
+  # ============================================================
   helm-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -212,6 +244,9 @@ jobs:
       - name: Run chart-testing (lint)
         run: ct lint --charts charts/labor-performance --validate-maintainers=false --check-version-increment=false
 
+  # ============================================================
+  # CLASSIFICATION: LINTERS & STATIC ANALYSIS (architecture fitness)
+  # ============================================================
   arch-test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -228,9 +263,15 @@ jobs:
   # merge, not just at publish time. Blocks on CRITICAL/HIGH with a known
   # fix; findings also land in the repo's Security tab (SARIF) regardless
   # of pass/fail so history is visible even when nothing blocks.
+  # ============================================================
+  # CLASSIFICATION: SECURITY SCANNER (container image)
+  # Runs ONLY for a pull_request targeting main -- validated pre-merge,
+  # never on develop pushes/PRs or on push-to-main (already validated).
+  # ============================================================
   trivy-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
     permissions:
       contents: read
       security-events: write
@@ -271,10 +312,13 @@ jobs:
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
+  # ============================================================
+  # CLASSIFICATION: PUBLISH (Docker image) -- push-to-main only
+  # ============================================================
   docker-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [lint, test, bdd, integration, mutation-fast, vuln, api-lint, helm-lint, arch-test, trivy-scan]
+    needs: [lint, test, bdd, integration, mutation-fast, vuln, api-lint, arch-test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
@@ -331,6 +375,9 @@ jobs:
   # release always points at an image that is genuinely live on Docker Hub.
   # Versioning: simple auto-increment patch (vX.Y.Z -> vX.Y.(Z+1)), starting
   # at v0.1.0 if no tag exists yet. No commit-message parsing.
+  # ============================================================
+  # CLASSIFICATION: PUBLISH (GitHub release + Helm chart) -- push-to-main only
+  # ============================================================
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 10

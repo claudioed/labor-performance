@@ -61,7 +61,12 @@ services in the fleet. See
 [ADR 0001](docs/docs/adr/0001-hexagonal-ports-and-adapters.md).
 
 ```
-cmd/labor/                        main.go — the only composition root
+cmd/labor/                        main.go — the OLTP composition root
+cmd/labor-projector/              main.go — analytics WRITER (the only writer of
+                                   the analytical DB); consumes the analytics
+                                   topic from FirstOffset, runs its migrations
+cmd/labor-reports/                main.go — analytics READER (read-only pool);
+                                   serves GET /reports/performance
 internal/
   domain/
     standard/                     LaborStandard aggregate: TaskType -> expected duration
@@ -73,19 +78,39 @@ internal/
     usecases/                     DefineStandard, GetStandard, RecordTaskPerformance
                                    (Kafka-consumer-driven), GetAssociateScorecard,
                                    GetTaskTypePerformance
+  analytics/
+    report/                       ANALYTICAL read model (ADR 0007) — depends on
+                                   NOTHING; the OLTP layers must not import it
+                                   and it must not import them (arch-go enforced)
   adapters/
-    inbound/http/                 chi handlers, DTOs, RFC 7807 error mapping
-    inbound/kafka/                consumes warehouse.fulfillment.events, TaskCompleted only
-    outbound/postgres/            pgxpool repos + golang-migrate runner
+    inbound/http/                 chi handlers, DTOs, RFC 7807 error mapping;
+                                   reports_handler.go serves the read model
+    inbound/kafka/                consumer.go        — warehouse.fulfillment.events
+                                                       (TaskCompleted only, OLTP)
+                                   analytics_consumer.go — warehouse.labor-performance
+                                                       .analytics (projector)
+    outbound/postgres/            pgxpool repos + golang-migrate runner (OLTP DB)
+    outbound/analyticsstore/      analytical DB: writer projection, read-only
+                                   reader, in-memory store for tests
     outbound/memory/              in-memory repos for tests/local
-    outbound/events/              log publisher (Kafka-ready interface, unused for publish in v1)
+    outbound/events/              log publisher (the default)
+    outbound/kafka/               analytics publisher + fan-out (EVENT_PUBLISHER=kafka)
     outbound/telemetry/           OTel traces/metrics/logs (copied from workforce-management)
-migrations/                       golang-migrate SQL files
-apis/openapi.yaml                 This service's OWN REST API (5 endpoints)
-apis/asyncapi.yaml                What this service SUBSCRIBES TO (consumer-side contract)
-docker-compose.yml                Local Postgres 16
+migrations/                       golang-migrate SQL files (OLTP schema)
+migrations/analytics/             golang-migrate SQL files (analytical schema)
+apis/openapi.yaml                 This service's OWN OLTP REST API (5 endpoints)
+apis/openapi-reports.yaml         The read-only reports API (ADR 0007)
+apis/asyncapi.yaml                What this service SUBSCRIBES TO and PUBLISHES
+docker-compose.yml                Local Postgres 16 (OLTP :5435, analytics :5436)
 docs/docs/adr/                    Architecture Decision Records
 ```
+
+**Three processes, one writer.** The analytical data product added in
+[ADR 0007](docs/docs/adr/0007-analytical-data-product.md) splits into
+`cmd/labor` (OLTP), `cmd/labor-projector` (the only writer of the
+analytical database) and `cmd/labor-reports` (read-only). They share no
+database connection: report query load can never contend with the
+transactional path that ingests `TaskCompleted`.
 
 The domain layer is pure Go: no `chi`, no `pgx`, no `kafka-go`. No JSON
 struct tags in the domain packages.
@@ -260,17 +285,29 @@ curl -s localhost:8080/standards/PICK
 curl -s localhost:8080/associates/assoc-1/scorecard
 # 200 OK:
 # {"associateId":"assoc-1","taskCount":3,"meanEfficiencyPct":91.2,
-#  "byTaskType":{"PICK":{"taskCount":3,"meanEfficiencyPct":91.2}}}
+#  "byTaskType":{"PICK":{"taskCount":3,"meanEfficiencyPct":91.2}},
+#  "trend":"STABLE","coachingFlag":false}
 # 404 application/problem+json if this service has never seen assoc-1
 ```
+
+`trend` (`IMPROVING`/`DECLINING`/`STABLE`/`INSUFFICIENT_DATA`) and
+`coachingFlag` are computed from the associate's most recent (up to 10)
+scored tasks — see [ADR 0005](docs/docs/adr/0005-associate-trend-and-coaching-flag.md)
+for the full design. Visibility only: this service never automates
+coaching, pay, or task-claim decisions from either field.
 
 **GetTaskTypePerformance** (fleet-wide, all associates):
 
 ```bash
 curl -s localhost:8080/task-types/PICK/performance
 # 200 OK — always 200, including a zero-count result for a never-seen type:
-# {"taskType":"PICK","taskCount":42,"meanEfficiencyPct":88.7}
+# {"taskType":"PICK","taskCount":42,"meanEfficiencyPct":88.7,"meanActualSeconds":39.4}
 ```
+
+`meanActualSeconds` is a real measured rate, independent of
+`meanEfficiencyPct` — populated even when no `LaborStandard` has ever
+been defined for this TaskType. See
+[ADR 0006](docs/docs/adr/0006-mean-actual-seconds-independent-of-standard.md).
 
 ## Quality gate
 
@@ -354,9 +391,13 @@ someone forgot about.
 - **Automatic pay-for-performance / bonus calculation.** A real Manhattan
   competitor feature, explicitly out of scope — this context surfaces the
   number, a human/other system decides what to do with it.
-- **Gamification, coaching workflows, real-time digital communication to
-  associates.** Real Manhattan/Blue Yonder features, explicitly out of
-  scope for v1 — this is the foundational data model only.
+- **Gamification, automated coaching workflows, real-time digital
+  communication to associates.** Real Manhattan/Blue Yonder features,
+  explicitly out of scope for v1 — v1 (this PR, ADR 0005) ships the
+  passive visibility signal only (`Trend`/`CoachingFlag` on the
+  Scorecard read model, a human reads it); an active workflow that
+  automatically messages, schedules, or nudges an associate based on
+  that signal remains deferred.
 - **Publishing `LaborStandardDefined`/`LaborStandardRevised`/
   `TaskPerformanceRecorded` to Kafka for other services to consume.** Log
   publisher only, no integration contract yet — no other repo needs these

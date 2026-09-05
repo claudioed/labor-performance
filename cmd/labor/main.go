@@ -14,9 +14,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	inboundhttp "github.com/claudioed/labor-performance/internal/adapters/inbound/http"
 	inboundkafka "github.com/claudioed/labor-performance/internal/adapters/inbound/kafka"
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
+	outboundkafka "github.com/claudioed/labor-performance/internal/adapters/outbound/kafka"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/postgres"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/telemetry"
@@ -72,7 +76,8 @@ func run() error {
 	}
 	defer closeAdapters()
 
-	publisher := events.NewLogPublisher(logger)
+	publisher, closePublisher := buildEventPublisher(logger)
+	defer closePublisher()
 	clock := memory.SystemClock{}
 
 	recordTaskPerformance := &usecases.RecordTaskPerformance{
@@ -163,6 +168,38 @@ func serviceVersion() string {
 		return version
 	}
 	return getenv("SERVICE_VERSION", "dev")
+}
+
+// buildEventPublisher wires the outbound event publisher, returning it
+// and a close function.
+//
+// The default is the log publisher this service has always used, so
+// nothing about the existing OLTP behaviour changes unless it is opted
+// into. Setting EVENT_PUBLISHER=kafka additionally fans every domain
+// event onto warehouse.labor-performance.analytics, which is what feeds
+// the analytical data product's projector (ADR-0007). The log publisher
+// stays FIRST in the fan-out so a broker outage still leaves the event
+// visible in the logs before the publish error surfaces.
+//
+// This is the only change the analytics data product makes to the OLTP
+// composition root, and it makes none at all to the domain or
+// application layers: they still see one ports.EventPublisher.
+func buildEventPublisher(logger *slog.Logger) (ports.EventPublisher, func()) {
+	logPublisher := events.NewLogPublisher(logger)
+	if !strings.EqualFold(getenv("EVENT_PUBLISHER", "log"), "kafka") {
+		return logPublisher, func() {}
+	}
+
+	brokers := strings.Split(getenv("KAFKA_BROKERS", "localhost:9092"), ",")
+	analytics := outboundkafka.NewAnalyticsPublisher(brokers, uuid.NewString)
+	logger.Info("analytics event publishing enabled",
+		"topic", envelope.TopicLaborPerformanceAnalytics, "brokers", brokers)
+
+	return outboundkafka.NewFanOutPublisher(logPublisher, analytics), func() {
+		if err := analytics.Close(); err != nil {
+			logger.Error("error closing analytics kafka publisher", "error", err)
+		}
+	}
 }
 
 // buildRepoAdapters wires the Postgres adapters when DATABASE_URL is set,

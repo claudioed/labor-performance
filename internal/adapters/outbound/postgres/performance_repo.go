@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -82,9 +83,44 @@ func (r *PerformanceRepo) ScorecardFor(ctx context.Context, associateId shared.A
 func (r *PerformanceRepo) TaskTypePerformanceFor(ctx context.Context, taskType shared.TaskType) (ports.TaskTypePerformance, error) {
 	out := ports.TaskTypePerformance{TaskType: taskType}
 	err := r.pool.QueryRow(ctx, `
-		SELECT COUNT(*), AVG(efficiency_pct)
+		SELECT COUNT(*), AVG(efficiency_pct), AVG(actual_seconds) FILTER (WHERE actual_seconds > 0)
 		FROM task_performances
 		WHERE task_type = $1
-	`, string(taskType)).Scan(&out.TaskCount, &out.MeanEfficiencyPct)
+	`, string(taskType)).Scan(&out.TaskCount, &out.MeanEfficiencyPct, &out.MeanActualSeconds)
 	return out, err
+}
+
+// RecentByAssociateID returns associateId's most recent rows, newest
+// first (ORDER BY completed_at DESC), capped at limit.
+func (r *PerformanceRepo) RecentByAssociateID(ctx context.Context, associateId shared.AssociateId, limit int) ([]*performance.TaskPerformance, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT event_id, task_id, associate_id, task_type, actual_seconds, standard_seconds_at_completion, efficiency_pct, completed_at
+		FROM task_performances
+		WHERE associate_id = $1
+		ORDER BY completed_at DESC
+		LIMIT $2
+	`, string(associateId), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]*performance.TaskPerformance, 0, limit)
+	for rows.Next() {
+		var eventId, taskId, assocId, taskType string
+		var actualSeconds, standardSeconds int64
+		var efficiencyPct *float64
+		var completedAt time.Time
+		if err := rows.Scan(&eventId, &taskId, &assocId, &taskType, &actualSeconds, &standardSeconds, &efficiencyPct, &completedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, performance.Rehydrate(
+			eventId, taskId, shared.AssociateId(assocId), shared.TaskType(taskType),
+			actualSeconds, standardSeconds, efficiencyPct, completedAt,
+		))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

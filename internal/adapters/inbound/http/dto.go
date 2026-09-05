@@ -32,6 +32,16 @@ type scorecardResponse struct {
 	TaskCount         int                                  `json:"taskCount"`
 	MeanEfficiencyPct *float64                             `json:"meanEfficiencyPct"`
 	ByTaskType        map[string]taskTypeBreakdownResponse `json:"byTaskType"`
+	// Trend is one of IMPROVING, DECLINING, STABLE, or
+	// INSUFFICIENT_DATA — see performance.ClassifyTrend. Always
+	// present, never omitted: INSUFFICIENT_DATA is a real, meaningful
+	// value, not an absence.
+	Trend string `json:"trend"`
+	// CoachingFlag is true iff this associate's most recent 3 scored
+	// tasks were all below the coaching floor — see
+	// performance.DetectCoachingFlag. Visibility only, never an
+	// automated action.
+	CoachingFlag bool `json:"coachingFlag"`
 }
 
 // taskTypePerformanceResponse is the GET /task-types/{taskType}/performance
@@ -40,6 +50,11 @@ type taskTypePerformanceResponse struct {
 	TaskType          string   `json:"taskType"`
 	TaskCount         int      `json:"taskCount"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
+	// MeanActualSeconds is the real measured mean duration for this
+	// TaskType, independent of whether an engineered standard exists.
+	// See ports.TaskTypePerformance's doc comment for the full
+	// distinction from MeanEfficiencyPct.
+	MeanActualSeconds *float64 `json:"meanActualSeconds"`
 }
 
 // problemDetails is the RFC 7807 (Problem Details for HTTP APIs) response

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -226,6 +227,8 @@ type scorecardBody struct {
 	AssociateId       string   `json:"associateId"`
 	TaskCount         int      `json:"taskCount"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
+	Trend             string   `json:"trend"`
+	CoachingFlag      bool     `json:"coachingFlag"`
 }
 
 func TestGetAssociateScorecard(t *testing.T) {
@@ -247,6 +250,51 @@ func TestGetAssociateScorecard(t *testing.T) {
 		if body.TaskCount != 1 || body.AssociateId != "assoc-1" {
 			t.Fatalf("body = %+v", body)
 		}
+		if body.Trend != "INSUFFICIENT_DATA" {
+			t.Fatalf("Trend = %q, want INSUFFICIENT_DATA with only 1 scored task", body.Trend)
+		}
+		if body.CoachingFlag {
+			t.Fatal("CoachingFlag must be false with only 1 scored task")
+		}
+	})
+
+	t.Run("success: coaching flag set after 3 consecutive below-floor tasks", func(t *testing.T) {
+		e := newTestEnv(t, now)
+		// Define a real standard through the actual REST endpoint (not
+		// the backdoor), so this exercises both public write surfaces
+		// end to end.
+		defineRec := e.do(t, http.MethodPost, "/standards", `{"taskType":"PICK","expectedSeconds":100}`)
+		if defineRec.Code != http.StatusCreated {
+			t.Fatalf("DefineStandard status = %d, want 201 (body: %s)", defineRec.Code, defineRec.Body.String())
+		}
+
+		for i := range 3 {
+			e.recordViaBackdoor(t, usecases.RecordTaskPerformanceRequest{
+				KafkaEventId: fmt.Sprintf("evt-%d", i), TaskId: fmt.Sprintf("task-%d", i), AssociateId: "assoc-flagged", TaskType: "PICK",
+				ActualSeconds: 200, CompletedAt: now.Add(time.Duration(i) * time.Hour), // 50% efficiency, well below the 85% floor
+			})
+		}
+
+		rec := e.do(t, http.MethodGet, "/associates/assoc-flagged/scorecard", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+		}
+		var body scorecardBody
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if !body.CoachingFlag {
+			t.Fatalf("CoachingFlag = false, want true (body: %+v)", body)
+		}
+		if body.Trend != "STABLE" && body.Trend != "DECLINING" {
+			// 3 tasks all at exactly 50% has zero variance from their
+			// own mean, so ClassifyTrend compares recentMean (50) to
+			// baselineMean (also 50, since these are the only rows) —
+			// STABLE is the correct, expected outcome here; DECLINING
+			// is accepted too in case a future baseline-window change
+			// alters which rows count toward the baseline.
+			t.Fatalf("Trend = %q, want STABLE (or DECLINING)", body.Trend)
+		}
 	})
 
 	t.Run("error: never seen this associate", func(t *testing.T) {
@@ -263,6 +311,7 @@ type taskTypePerformanceBody struct {
 	TaskType          string   `json:"taskType"`
 	TaskCount         int      `json:"taskCount"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
+	MeanActualSeconds *float64 `json:"meanActualSeconds"`
 }
 
 func TestGetTaskTypePerformance(t *testing.T) {
@@ -283,6 +332,12 @@ func TestGetTaskTypePerformance(t *testing.T) {
 		}
 		if body.TaskCount != 1 {
 			t.Fatalf("TaskCount = %d, want 1", body.TaskCount)
+		}
+		if body.MeanActualSeconds == nil {
+			t.Fatal("MeanActualSeconds must be populated")
+		}
+		if *body.MeanActualSeconds != 50 {
+			t.Fatalf("MeanActualSeconds = %v, want 50", *body.MeanActualSeconds)
 		}
 	})
 

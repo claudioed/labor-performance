@@ -3,13 +3,13 @@
 // dependency rule described in the project's CLAUDE.md: dependencies point
 // inward only, and inbound/outbound adapters never depend on each other.
 //
-// Unlike inventory-storage's architecture_test.go, this service has no
-// analytics data-mesh side (no internal/analytics/report region, no ADR-0011
-// equivalent) — this is a Supporting-subdomain Kafka consumer with a single
-// OLTP write path, so the two analytics-specific rules inventory-storage
-// enforces (analytics-depends-on-nothing-but-itself, OLTP-must-not-import-
-// analytics) simply do not apply here and are deliberately omitted rather
-// than adapted to a region that does not exist in this codebase.
+// This service now HAS an analytics data-mesh side —
+// internal/analytics/report, added by ADR-0007 for fleet parity with the
+// sibling services' data products — so the two analytics-specific rules
+// the siblings enforce (analytics-depends-on-nothing-but-itself,
+// OLTP-must-not-import-analytics) are asserted here too. They were
+// deliberately absent from this file's first version, when no such region
+// existed to constrain.
 package architecture
 
 import (
@@ -87,6 +87,55 @@ func TestHexagonalArchitecture(t *testing.T) {
 
 		result := archgo.CheckArchitecture(moduleInfo, configuration.Config{
 			DependenciesRules: []*configuration.DependenciesRule{rule},
+		})
+
+		assertPass(t, result)
+	})
+
+	t.Run("the analytics read model depends on nothing but itself", func(t *testing.T) {
+		// internal/analytics/report is the analytical read-model region
+		// added in ADR-0007. Its whole value is being derivable from the
+		// event stream alone: if it could reach into the OLTP domain or
+		// application layers, the report would silently become coupled to
+		// the transactional model it is supposed to be independent of, and
+		// "rebuild the read model by replaying the topic" would stop being
+		// true.
+		rule := &configuration.DependenciesRule{
+			Package: "**.internal.analytics.**",
+			ShouldOnlyDependsOn: &configuration.Dependencies{
+				Internal: []string{"**.internal.analytics.**"},
+			},
+		}
+
+		result := archgo.CheckArchitecture(moduleInfo, configuration.Config{
+			DependenciesRules: []*configuration.DependenciesRule{rule},
+		})
+
+		assertPass(t, result)
+	})
+
+	t.Run("the OLTP domain and application layers do not import analytics", func(t *testing.T) {
+		// The other half of the same isolation: the analytics data
+		// product must remain strictly additive from the OLTP write
+		// path's point of view. The domain rule above already forbids
+		// this transitively, but stating it directly means a future
+		// loosening of that rule cannot quietly let analytics leak
+		// inward.
+		rule := &configuration.DependenciesRule{
+			Package: "**.internal.domain.**",
+			ShouldNotDependsOn: &configuration.Dependencies{
+				Internal: []string{"**.internal.analytics.**"},
+			},
+		}
+		appRule := &configuration.DependenciesRule{
+			Package: "**.internal.application.**",
+			ShouldNotDependsOn: &configuration.Dependencies{
+				Internal: []string{"**.internal.analytics.**"},
+			},
+		}
+
+		result := archgo.CheckArchitecture(moduleInfo, configuration.Config{
+			DependenciesRules: []*configuration.DependenciesRule{rule, appRule},
 		})
 
 		assertPass(t, result)

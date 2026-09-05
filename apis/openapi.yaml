@@ -224,6 +224,22 @@ components:
           type: object
           additionalProperties:
             $ref: "#/components/schemas/TaskTypeBreakdown"
+        trend:
+          type: string
+          enum: [IMPROVING, DECLINING, STABLE, INSUFFICIENT_DATA]
+          description: >
+            How this associate's most recent scored tasks (up to the
+            last 10) compare to their all-time mean EfficiencyPct.
+            INSUFFICIENT_DATA when fewer than 3 recent tasks were
+            scored -- always present, never omitted, since
+            "not enough data yet" is itself a meaningful signal.
+        coachingFlag:
+          type: boolean
+          description: >
+            True iff this associate's 3 most recent SCORED tasks were
+            all below the coaching floor (85% efficiency). Visibility
+            only -- this service never automates coaching, pay, or
+            task-claim decisions from this signal.
     TaskTypePerformance:
       type: object
       properties:
@@ -235,6 +251,17 @@ components:
           type: number
           format: double
           nullable: true
+        meanActualSeconds:
+          type: number
+          format: double
+          nullable: true
+          description: >
+            The real measured mean duration (seconds) for this TaskType,
+            across every recorded row with a positive ActualSeconds --
+            independent of whether an engineered labor standard exists to
+            compare it against. Null iff no measurable row has ever been
+            recorded for this TaskType. Distinct from meanEfficiencyPct,
+            which additionally requires an active standard.
     ProblemDetails:
       type: object
       description: RFC 7807 Problem Details for HTTP APIs.

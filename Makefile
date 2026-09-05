@@ -15,7 +15,12 @@ GOLANGCI_LINT      ?= golangci-lint
 GOLANGCI_VERSION   := v2.13.1
 
 COVERAGE_OUT       := coverage.out
-COVERAGE_PKGS      := ./internal/domain/...,./internal/application/...
+# internal/analytics is inside the gate alongside domain/application: it is
+# the analytical READ MODEL (ADR 0007) — pure, dependency-free aggregation
+# logic that decides whether a mean exists at all, which is exactly the
+# kind of code the gate is for. Keep this list in sync with ci.yml's
+# -coverpkg.
+COVERAGE_PKGS      := ./internal/domain/...,./internal/application/...,./internal/analytics/...
 COVERAGE_THRESHOLD := 90
 
 .DEFAULT_GOAL := help

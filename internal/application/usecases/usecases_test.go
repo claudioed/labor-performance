@@ -3,6 +3,7 @@ package usecases_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -350,6 +351,192 @@ func TestGetTaskTypePerformance_NeverSeenReturnsZeroNotError(t *testing.T) {
 	}
 	if tp.TaskCount != 0 || tp.MeanEfficiencyPct != nil {
 		t.Fatalf("unexpected non-zero result for never-seen task type: %+v", tp)
+	}
+	if tp.MeanActualSeconds != nil {
+		t.Fatalf("MeanActualSeconds = %v, want nil for never-seen task type", *tp.MeanActualSeconds)
+	}
+}
+
+// TestGetTaskTypePerformance_MeanActualSeconds_IndependentOfStandard proves
+// MeanActualSeconds is populated even when NO LaborStandard was ever
+// defined (so MeanEfficiencyPct is nil for every row) -- the real-measured-
+// rate field must not require a standard to exist, unlike EfficiencyPct.
+func TestGetTaskTypePerformance_MeanActualSeconds_IndependentOfStandard(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	// Deliberately no DefineStandard call.
+	for i, secs := range []int64{40, 50, 60} {
+		if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+			KafkaEventId: fmt.Sprintf("evt-%d", i), TaskId: fmt.Sprintf("task-%d", i), TaskType: shared.Pick,
+			ActualSeconds: secs, CompletedAt: baseTime.Add(time.Duration(i) * time.Hour),
+		}); err != nil {
+			t.Fatalf("RecordTaskPerformance[%d]: %v", i, err)
+		}
+	}
+
+	tp, err := f.getTaskTypePerformance.Execute(ctx, shared.Pick)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if tp.MeanEfficiencyPct != nil {
+		t.Fatalf("MeanEfficiencyPct = %v, want nil (no standard was ever defined)", *tp.MeanEfficiencyPct)
+	}
+	if tp.MeanActualSeconds == nil {
+		t.Fatal("MeanActualSeconds must be populated even with no standard defined")
+	}
+	if got, want := *tp.MeanActualSeconds, 50.0; got != want {
+		t.Fatalf("MeanActualSeconds = %v, want %v (mean of 40,50,60)", got, want)
+	}
+}
+
+// TestGetTaskTypePerformance_MeanActualSeconds_ExcludesUnmeasurableRows
+// proves a row with ActualSeconds<=0 (unmeasurable) is excluded from the
+// MeanActualSeconds average, exactly like it's excluded from
+// MeanEfficiencyPct.
+func TestGetTaskTypePerformance_MeanActualSeconds_ExcludesUnmeasurableRows(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-measured", TaskId: "task-measured", TaskType: shared.Pack,
+		ActualSeconds: 60, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("RecordTaskPerformance(measured): %v", err)
+	}
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-unmeasurable", TaskId: "task-unmeasurable", TaskType: shared.Pack,
+		ActualSeconds: 0, CompletedAt: baseTime.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("RecordTaskPerformance(unmeasurable): %v", err)
+	}
+
+	tp, err := f.getTaskTypePerformance.Execute(ctx, shared.Pack)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if tp.TaskCount != 2 {
+		t.Fatalf("TaskCount = %d, want 2 (both rows count, even the unmeasurable one)", tp.TaskCount)
+	}
+	if tp.MeanActualSeconds == nil {
+		t.Fatal("MeanActualSeconds must be populated from the one measurable row")
+	}
+	if got, want := *tp.MeanActualSeconds, 60.0; got != want {
+		t.Fatalf("MeanActualSeconds = %v, want %v (the unmeasurable row must be excluded from the average, not counted as 0)", got, want)
+	}
+}
+
+// TestGetAssociateScorecard_Trend_InsufficientDataBelowThreeScoredTasks
+// covers the real end-to-end wiring: fewer than 3 scored tasks yields
+// TrendInsufficientData and no coaching flag, through the real memory
+// repo, not just the pure domain function in isolation.
+func TestGetAssociateScorecard_Trend_InsufficientDataBelowThreeScoredTasks(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45); err != nil {
+		t.Fatalf("DefineStandard: %v", err)
+	}
+	for i := range 2 {
+		if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+			KafkaEventId: fmt.Sprintf("evt-%d", i), TaskId: fmt.Sprintf("task-%d", i), AssociateId: "assoc-1", TaskType: shared.Pick,
+			ActualSeconds: 45, CompletedAt: baseTime.Add(time.Duration(i) * time.Hour),
+		}); err != nil {
+			t.Fatalf("RecordTaskPerformance[%d]: %v", i, err)
+		}
+	}
+
+	sc, err := f.getAssociateScorecard.Execute(ctx, "assoc-1")
+	if err != nil {
+		t.Fatalf("GetAssociateScorecard: %v", err)
+	}
+	if sc.Trend != performance.TrendInsufficientData {
+		t.Fatalf("Trend = %v, want TrendInsufficientData with only 2 scored tasks", sc.Trend)
+	}
+	if sc.CoachingFlag {
+		t.Fatal("CoachingFlag must be false with only 2 scored tasks (below the 3-task threshold)")
+	}
+}
+
+// TestGetAssociateScorecard_CoachingFlag_ThreeConsecutiveBelowFloor
+// proves the real end-to-end wiring flags an associate whose 3 most
+// recent scored tasks are all below the coaching floor, and that the
+// window is chronological (RecentByAssociateID + the oldest-first
+// reordering in trendAndCoachingFlag), not insertion order.
+func TestGetAssociateScorecard_CoachingFlag_ThreeConsecutiveBelowFloor(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 100); err != nil {
+		t.Fatalf("DefineStandard: %v", err)
+	}
+
+	// 100/actualSeconds*100 efficiency: actualSeconds=200 -> 50% (well
+	// below the 85% coaching floor), recorded across 3 distinct,
+	// strictly increasing CompletedAt timestamps.
+	for i := range 3 {
+		if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+			KafkaEventId: fmt.Sprintf("evt-%d", i), TaskId: fmt.Sprintf("task-%d", i), AssociateId: "assoc-1", TaskType: shared.Pick,
+			ActualSeconds: 200, CompletedAt: baseTime.Add(time.Duration(i) * time.Hour),
+		}); err != nil {
+			t.Fatalf("RecordTaskPerformance[%d]: %v", i, err)
+		}
+	}
+
+	sc, err := f.getAssociateScorecard.Execute(ctx, "assoc-1")
+	if err != nil {
+		t.Fatalf("GetAssociateScorecard: %v", err)
+	}
+	if !sc.CoachingFlag {
+		t.Fatal("CoachingFlag must be true: the last 3 scored tasks were all at 50% efficiency, well below the 85% floor")
+	}
+}
+
+// TestGetAssociateScorecard_CoachingFlag_RecentGoodTaskClearsFlag proves
+// a later on-standard task breaks a below-floor streak — the flag is
+// about the CURRENT trailing window, not "ever had 3 bad in a row".
+func TestGetAssociateScorecard_CoachingFlag_RecentGoodTaskClearsFlag(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 100); err != nil {
+		t.Fatalf("DefineStandard: %v", err)
+	}
+
+	// 3 bad tasks, then 1 good one (actualSeconds=90 -> ~111% efficiency).
+	for i := range 3 {
+		if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+			KafkaEventId: fmt.Sprintf("evt-bad-%d", i), TaskId: fmt.Sprintf("task-bad-%d", i), AssociateId: "assoc-1", TaskType: shared.Pick,
+			ActualSeconds: 200, CompletedAt: baseTime.Add(time.Duration(i) * time.Hour),
+		}); err != nil {
+			t.Fatalf("RecordTaskPerformance(bad %d): %v", i, err)
+		}
+	}
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-good", TaskId: "task-good", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 90, CompletedAt: baseTime.Add(4 * time.Hour),
+	}); err != nil {
+		t.Fatalf("RecordTaskPerformance(good): %v", err)
+	}
+
+	sc, err := f.getAssociateScorecard.Execute(ctx, "assoc-1")
+	if err != nil {
+		t.Fatalf("GetAssociateScorecard: %v", err)
+	}
+	if sc.CoachingFlag {
+		t.Fatal("CoachingFlag must be false: the most recent task was on-standard, breaking the below-floor streak")
+	}
+}
+
+func TestGetAssociateScorecard_PropagatesRecentByAssociateIDError(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 45, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("RecordTaskPerformance: %v", err)
+	}
+
+	wrapped := &failingPerformanceRepo{PerformanceRepo: f.performances, failRecent: true}
+	uc := &usecases.GetAssociateScorecard{Performances: wrapped}
+	if _, err := uc.Execute(ctx, "assoc-1"); !errors.Is(err, errUnmapped) {
+		t.Fatalf("error = %v, want errUnmapped", err)
 	}
 }
 

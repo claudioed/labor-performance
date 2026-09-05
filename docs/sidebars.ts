@@ -30,6 +30,8 @@ const sidebars: SidebarsConfig = {
         'adr/0002-new-bounded-context-not-extension-of-workforce-or-fulfillment',
         'adr/0003-kafka-choreography-consumer-of-fulfillment-execution',
         'adr/0004-standard-frozen-at-completion-time-not-recomputed',
+        'adr/0005-associate-trend-and-coaching-flag',
+        'adr/0006-mean-actual-seconds-independent-of-standard',
       ],
     },
   ],
