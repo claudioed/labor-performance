@@ -141,3 +141,22 @@ type ProcessedEvents interface {
 type Clock interface {
 	Now() time.Time
 }
+
+// StandardMetrics records DefineStandard outcomes (fleet-standard-metrics
+// ADR, Tier 2) so the business signal — how often a caller's attempt to
+// set an engineered labor standard actually takes effect versus gets
+// rejected for violating the one aggregate invariant (ExpectedSeconds must
+// be > 0) — is observable independently of HTTP traffic. Use cases treat a
+// nil value as "not instrumented", so wiring it is optional, mirroring
+// inventory-storage's ports.ReservationMetrics.
+type StandardMetrics interface {
+	// StandardDefinitionAccepted records a DefineStandard call that
+	// persisted successfully (first definition or revision — both are
+	// the same business event: a caller's requested standard took
+	// effect).
+	StandardDefinitionAccepted(ctx context.Context)
+	// StandardDefinitionRejected records a DefineStandard call rejected
+	// for a non-positive ExpectedSeconds — a caller submitted a standard
+	// that is not a business fact (see standard.ErrNonPositiveExpectedSeconds).
+	StandardDefinitionRejected(ctx context.Context)
+}

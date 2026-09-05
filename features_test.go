@@ -48,7 +48,7 @@ func newServer() *httptest.Server {
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: performances},
 	}
 
-	return httptest.NewServer(inboundhttp.NewRouter(s, nil))
+	return httptest.NewServer(inboundhttp.NewRouter(s, nil, ""))
 }
 
 // world is the per-scenario state: one server with its own in-memory

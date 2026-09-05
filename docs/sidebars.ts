@@ -32,6 +32,8 @@ const sidebars: SidebarsConfig = {
         'adr/0004-standard-frozen-at-completion-time-not-recomputed',
         'adr/0005-associate-trend-and-coaching-flag',
         'adr/0006-mean-actual-seconds-independent-of-standard',
+        'adr/0007-analytical-data-product',
+        'adr/0008-standard-metrics-convention',
       ],
     },
   ],

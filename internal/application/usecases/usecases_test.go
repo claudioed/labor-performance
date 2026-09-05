@@ -78,6 +78,91 @@ func TestDefineStandard_FailingPath_NonPositiveExpectedSeconds(t *testing.T) {
 	}
 }
 
+// TestDefineStandard_RecordsMetrics_OnAcceptedDefinition covers the
+// fleet-standard-metrics ADR's Tier-2 business counter: a successful
+// first-time definition (and, separately, a successful revision) both
+// record labor_performance.standards.defined{outcome=accepted}, and
+// neither records a rejection.
+func TestDefineStandard_RecordsMetrics_OnAcceptedDefinition(t *testing.T) {
+	standards := memory.NewStandardRepo()
+	publisher := events.NewLogPublisher(nil)
+	clock := memory.FixedClock{At: baseTime}
+	metrics := &fakeStandardMetrics{}
+
+	uc := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, Metrics: metrics}
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if metrics.accepted != 1 {
+		t.Fatalf("accepted = %d, want 1", metrics.accepted)
+	}
+	if metrics.rejected != 0 {
+		t.Fatalf("rejected = %d, want 0", metrics.rejected)
+	}
+}
+
+// TestDefineStandard_RecordsMetrics_OnRevision covers the revision branch
+// specifically: it must also count as "accepted", not a separate outcome
+// — the ADR treats first-definition and revision as the same business
+// event (a caller's requested standard took effect).
+func TestDefineStandard_RecordsMetrics_OnRevision(t *testing.T) {
+	standards := memory.NewStandardRepo()
+	publisher := events.NewLogPublisher(nil)
+	metrics := &fakeStandardMetrics{}
+	ctx := context.Background()
+
+	uc1 := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: memory.FixedClock{At: baseTime}, Metrics: metrics}
+	if _, err := uc1.Execute(ctx, shared.Pick, 45); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+
+	uc2 := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: memory.FixedClock{At: baseTime.Add(24 * time.Hour)}, Metrics: metrics}
+	if _, err := uc2.Execute(ctx, shared.Pick, 50); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+
+	if metrics.accepted != 2 {
+		t.Fatalf("accepted = %d, want 2 (one per successful Execute call)", metrics.accepted)
+	}
+	if metrics.rejected != 0 {
+		t.Fatalf("rejected = %d, want 0", metrics.rejected)
+	}
+}
+
+// TestDefineStandard_RecordsMetrics_OnRejectedDefinition covers the
+// invariant-violation path: a non-positive ExpectedSeconds must record
+// outcome=rejected and must NOT record outcome=accepted.
+func TestDefineStandard_RecordsMetrics_OnRejectedDefinition(t *testing.T) {
+	standards := memory.NewStandardRepo()
+	publisher := events.NewLogPublisher(nil)
+	clock := memory.FixedClock{At: baseTime}
+	metrics := &fakeStandardMetrics{}
+
+	uc := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, Metrics: metrics}
+	_, err := uc.Execute(context.Background(), shared.Pick, 0)
+	if !errors.Is(err, standard.ErrNonPositiveExpectedSeconds) {
+		t.Fatalf("error = %v, want ErrNonPositiveExpectedSeconds", err)
+	}
+
+	if metrics.rejected != 1 {
+		t.Fatalf("rejected = %d, want 1", metrics.rejected)
+	}
+	if metrics.accepted != 0 {
+		t.Fatalf("accepted = %d, want 0", metrics.accepted)
+	}
+}
+
+// TestDefineStandard_NilMetrics_DoesNotPanic covers the documented
+// "nil is a valid not-instrumented value" contract on
+// ports.StandardMetrics.
+func TestDefineStandard_NilMetrics_DoesNotPanic(t *testing.T) {
+	f := newFixture(baseTime)
+	if _, err := f.defineStandard.Execute(context.Background(), shared.Pick, 45); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
 // TestDefineStandard_Revision covers the "DefineStandard called twice for
 // the same TaskType closes the first" invariant end to end, including the
 // "resolve active as of CompletedAt" resolution a subsequent
