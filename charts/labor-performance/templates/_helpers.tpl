@@ -69,3 +69,28 @@ Name of the Secret holding DATABASE_URL, when the chart creates its own.
 {{- include "labor-performance.fullname" . }}-database
 {{- end }}
 {{- end }}
+
+{{/*
+Fully qualified name of the analytics projector deployment (ADR-0007).
+*/}}
+{{- define "labor-performance.projectorFullname" -}}
+{{- include "labor-performance.fullname" . }}-projector
+{{- end }}
+
+{{/*
+Fully qualified name of the analytics reports deployment/service (ADR-0007).
+*/}}
+{{- define "labor-performance.reportsFullname" -}}
+{{- include "labor-performance.fullname" . }}-reports
+{{- end }}
+
+{{/*
+Name of the Secret holding the analytics DSNs, when the chart creates its own.
+*/}}
+{{- define "labor-performance.analyticsSecretName" -}}
+{{- if .Values.analytics.database.existingSecret }}
+{{- .Values.analytics.database.existingSecret }}
+{{- else }}
+{{- include "labor-performance.fullname" . }}-analytics
+{{- end }}
+{{- end }}
