@@ -66,6 +66,7 @@ Typos, broken links and formatting are of course fair game.
 | [0006](./0006-mean-actual-seconds-independent-of-standard.md) | MeanActualSeconds on TaskTypePerformance, independent of any standard | Accepted |
 | [0007](./0007-analytical-data-product.md) | Analytical data product | Accepted |
 | [0008](./0008-standard-metrics-convention.md) | Standard metrics convention across the fleet | Accepted |
+| [0009](./0009-mcp-inbound-adapter.md) | Model Context Protocol as an inbound adapter, not a new service | Accepted |
 
 Each of these reconstructs a decision that is actually visible in this
 repository's history, `CLAUDE.md` or code — none is a generic placeholder.

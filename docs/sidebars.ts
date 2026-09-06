@@ -34,6 +34,7 @@ const sidebars: SidebarsConfig = {
         'adr/0006-mean-actual-seconds-independent-of-standard',
         'adr/0007-analytical-data-product',
         'adr/0008-standard-metrics-convention',
+        'adr/0009-mcp-inbound-adapter',
       ],
     },
   ],
