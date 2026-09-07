@@ -10,8 +10,9 @@
 # definition of each sensor (see Makefile / .github/workflows/ci.yml).
 # Nothing here needs a database or a broker: v1 has no Postgres/mutation
 # integration target wired into the default gate, so committing and
-# pushing stay fast and offline-friendly (the Kafka integration test is a
-# separate, explicit `make integration-kafka` target, not part of `check`).
+# pushing stay fast and offline-friendly (the Kafka Testcontainers integration
+# test is a separate, explicit `make integration-kafka-testcontainers` target,
+# not part of `check`).
 
 min_version: 1.7.0
 
