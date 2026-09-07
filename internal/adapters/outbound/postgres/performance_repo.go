@@ -23,7 +23,7 @@ func NewPerformanceRepo(pool *pgxpool.Pool) *PerformanceRepo {
 }
 
 func (r *PerformanceRepo) Save(ctx context.Context, p *performance.TaskPerformance) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := querierFrom(ctx, r.pool).Exec(ctx, `
 		INSERT INTO task_performances
 			(event_id, task_id, associate_id, task_type, actual_seconds, standard_seconds_at_completion, efficiency_pct, completed_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -34,7 +34,7 @@ func (r *PerformanceRepo) Save(ctx context.Context, p *performance.TaskPerforman
 
 func (r *PerformanceRepo) ExistsByAssociateID(ctx context.Context, associateId shared.AssociateId) (bool, error) {
 	var exists bool
-	err := r.pool.QueryRow(ctx, `
+	err := querierFrom(ctx, r.pool).QueryRow(ctx, `
 		SELECT EXISTS(SELECT 1 FROM task_performances WHERE associate_id = $1)
 	`, string(associateId)).Scan(&exists)
 	return exists, err
@@ -43,7 +43,7 @@ func (r *PerformanceRepo) ExistsByAssociateID(ctx context.Context, associateId s
 func (r *PerformanceRepo) ScorecardFor(ctx context.Context, associateId shared.AssociateId) (ports.Scorecard, error) {
 	sc := ports.Scorecard{AssociateId: associateId, ByTaskType: make(map[shared.TaskType]ports.TaskTypeBreakdown)}
 
-	row := r.pool.QueryRow(ctx, `
+	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
 		SELECT COUNT(*), AVG(efficiency_pct)
 		FROM task_performances
 		WHERE associate_id = $1
@@ -54,7 +54,7 @@ func (r *PerformanceRepo) ScorecardFor(ctx context.Context, associateId shared.A
 	}
 	sc.MeanEfficiencyPct = mean
 
-	rows, err := r.pool.Query(ctx, `
+	rows, err := querierFrom(ctx, r.pool).Query(ctx, `
 		SELECT task_type, COUNT(*), AVG(efficiency_pct)
 		FROM task_performances
 		WHERE associate_id = $1
@@ -82,7 +82,7 @@ func (r *PerformanceRepo) ScorecardFor(ctx context.Context, associateId shared.A
 
 func (r *PerformanceRepo) TaskTypePerformanceFor(ctx context.Context, taskType shared.TaskType) (ports.TaskTypePerformance, error) {
 	out := ports.TaskTypePerformance{TaskType: taskType}
-	err := r.pool.QueryRow(ctx, `
+	err := querierFrom(ctx, r.pool).QueryRow(ctx, `
 		SELECT COUNT(*), AVG(efficiency_pct), AVG(actual_seconds) FILTER (WHERE actual_seconds > 0)
 		FROM task_performances
 		WHERE task_type = $1
@@ -93,7 +93,7 @@ func (r *PerformanceRepo) TaskTypePerformanceFor(ctx context.Context, taskType s
 // RecentByAssociateID returns associateId's most recent rows, newest
 // first (ORDER BY completed_at DESC), capped at limit.
 func (r *PerformanceRepo) RecentByAssociateID(ctx context.Context, associateId shared.AssociateId, limit int) ([]*performance.TaskPerformance, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := querierFrom(ctx, r.pool).Query(ctx, `
 		SELECT event_id, task_id, associate_id, task_type, actual_seconds, standard_seconds_at_completion, efficiency_pct, completed_at
 		FROM task_performances
 		WHERE associate_id = $1

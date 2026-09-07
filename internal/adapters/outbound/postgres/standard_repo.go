@@ -23,7 +23,7 @@ func NewStandardRepo(pool *pgxpool.Pool) *StandardRepo {
 }
 
 func (r *StandardRepo) Save(ctx context.Context, s *standard.LaborStandard) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := querierFrom(ctx, r.pool).Exec(ctx, `
 		INSERT INTO labor_standards (id, task_type, expected_seconds, effective_from, effective_to)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (id) DO UPDATE
@@ -33,7 +33,7 @@ func (r *StandardRepo) Save(ctx context.Context, s *standard.LaborStandard) erro
 }
 
 func (r *StandardRepo) FindActiveAsOf(ctx context.Context, taskType shared.TaskType, t time.Time) (*standard.LaborStandard, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
 		SELECT id, task_type, expected_seconds, effective_from, effective_to
 		FROM labor_standards
 		WHERE task_type = $1
@@ -44,7 +44,7 @@ func (r *StandardRepo) FindActiveAsOf(ctx context.Context, taskType shared.TaskT
 }
 
 func (r *StandardRepo) FindCurrentlyActive(ctx context.Context, taskType shared.TaskType) (*standard.LaborStandard, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
 		SELECT id, task_type, expected_seconds, effective_from, effective_to
 		FROM labor_standards
 		WHERE task_type = $1 AND effective_to IS NULL

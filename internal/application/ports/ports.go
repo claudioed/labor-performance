@@ -121,6 +121,23 @@ type EventPublisher interface {
 	Publish(ctx context.Context, events ...shared.DomainEvent) error
 }
 
+// UnitOfWork brackets a use case's state change and the domain events it
+// raises so both commit or neither does (ADR 0010, transactional outbox).
+//
+// Execute runs fn inside one atomic scope. Every Repo.Save,
+// ProcessedEvents.MarkProcessed and EventPublisher.Publish made with the
+// ctx handed to fn is bound to that same scope: if fn returns an error
+// the scope is rolled back and nothing — neither the aggregate row, nor
+// the idempotency marker, nor the outbox row — is visible afterwards.
+//
+// Adapters that have no transactional backing (the in-memory repos, the
+// log publisher) satisfy this with a pass-through that simply calls fn;
+// the use cases stay adapter-agnostic either way and treat a nil
+// UnitOfWork as exactly that pass-through.
+type UnitOfWork interface {
+	Execute(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 // ProcessedEvents is the idempotency gate for at-least-once Kafka
 // consumption of TaskCompleted, keyed on the message's event_id rather
 // than TaskId (which could in principle be reused after a very long

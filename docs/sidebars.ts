@@ -35,6 +35,7 @@ const sidebars: SidebarsConfig = {
         'adr/0007-analytical-data-product',
         'adr/0008-standard-metrics-convention',
         'adr/0009-mcp-inbound-adapter',
+        'adr/0010-transactional-outbox',
       ],
     },
   ],
