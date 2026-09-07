@@ -5,6 +5,7 @@ package kafka_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -93,7 +94,7 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 	consumeCancel()
 	select {
 	case err := <-runErr:
-		if err != nil {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			t.Errorf("run consumer: %v", err)
 		}
 	case <-time.After(10 * time.Second):
