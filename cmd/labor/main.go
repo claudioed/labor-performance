@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	inboundhttp "github.com/claudioed/labor-performance/internal/adapters/inbound/http"
 	inboundkafka "github.com/claudioed/labor-performance/internal/adapters/inbound/kafka"
@@ -70,13 +71,14 @@ func run() error {
 	databaseURL := os.Getenv("DATABASE_URL")
 	migrationsPath := getenv("MIGRATIONS_PATH", "migrations")
 
-	standards, performances, processed, closeAdapters, err := buildRepoAdapters(ctx, databaseURL, migrationsPath, logger)
+	persistence, err := buildPersistence(ctx, databaseURL, migrationsPath, logger)
 	if err != nil {
 		return err
 	}
-	defer closeAdapters()
+	defer persistence.close()
+	standards, performances, processed := persistence.standards, persistence.performances, persistence.processed
 
-	publisher, closePublisher := buildEventPublisher(logger)
+	publisher, relay, closePublisher := buildEventPublisher(persistence, logger)
 	defer closePublisher()
 	clock := memory.SystemClock{}
 
@@ -91,10 +93,11 @@ func run() error {
 		Processed:    processed,
 		Events:       publisher,
 		Clock:        clock,
+		UnitOfWork:   persistence.uow,
 	}
 
 	server := &inboundhttp.Server{
-		DefineStandard:         &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, Metrics: standardMetrics},
+		DefineStandard:         &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, UnitOfWork: persistence.uow, Metrics: standardMetrics},
 		GetStandard:            &usecases.GetStandard{Standards: standards},
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: performances},
@@ -118,7 +121,7 @@ func run() error {
 	consumerCtx, cancelConsumer := context.WithCancel(ctx)
 	defer cancelConsumer()
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		logger.Info("http server listening", "addr", httpAddr)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -135,6 +138,25 @@ func run() error {
 	stopCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// The outbox relay (ADR 0010) runs alongside the HTTP server and the
+	// consumer in the same process, draining outbox_events onto Kafka. It
+	// is only wired when both Postgres and the kafka publisher are
+	// configured.
+	relayDone := make(chan struct{})
+	relayCtx, stopRelay := context.WithCancel(context.Background())
+	defer stopRelay()
+	if relay != nil {
+		go func() {
+			defer close(relayDone)
+			logger.Info("outbox relay running", "topic", envelope.TopicLaborPerformanceAnalytics)
+			if err := relay.Run(relayCtx); err != nil && !errors.Is(err, context.Canceled) {
+				errCh <- err
+			}
+		}()
+	} else {
+		close(relayDone)
+	}
+
 	select {
 	case err := <-errCh:
 		return err
@@ -144,7 +166,17 @@ func run() error {
 	cancelConsumer()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return httpServer.Shutdown(shutdownCtx)
+	err = httpServer.Shutdown(shutdownCtx)
+	// Let the relay finish its in-flight pass so an event committed by a
+	// request (or a consumed message) that completed just before shutdown
+	// is not stranded until the next pod boots.
+	stopRelay()
+	select {
+	case <-relayDone:
+	case <-shutdownCtx.Done():
+		logger.Warn("outbox relay did not stop before the shutdown deadline")
+	}
+	return err
 }
 
 // newLogger builds the process-wide structured logger, wrapped so any
@@ -175,8 +207,9 @@ func serviceVersion() string {
 	return getenv("SERVICE_VERSION", "dev")
 }
 
-// buildEventPublisher wires the outbound event publisher, returning it
-// and a close function.
+// buildEventPublisher wires the outbound event publisher, returning it,
+// the outbox relay to run alongside the HTTP server (nil when there is
+// none), and a close function.
 //
 // The default is the log publisher this service has always used, so
 // nothing about the existing OLTP behaviour changes unless it is opted
@@ -186,48 +219,106 @@ func serviceVersion() string {
 // stays FIRST in the fan-out so a broker outage still leaves the event
 // visible in the logs before the publish error surfaces.
 //
-// This is the only change the analytics data product makes to the OLTP
-// composition root, and it makes none at all to the domain or
-// application layers: they still see one ports.EventPublisher.
-func buildEventPublisher(logger *slog.Logger) (ports.EventPublisher, func()) {
+// With BOTH Postgres and kafka configured the use cases publish into the
+// transactional outbox (ADR 0010) and the relay forwards rows to Kafka;
+// the store and the topic can no longer diverge. With kafka but no
+// Postgres (in-memory dev runs) events go straight to the broker as
+// before — there is no transaction to bind them to.
+//
+// None of this touches the domain or application layers: they still see
+// one ports.EventPublisher.
+func buildEventPublisher(p *persistence, logger *slog.Logger) (ports.EventPublisher, *postgres.OutboxRelay, func()) {
 	logPublisher := events.NewLogPublisher(logger)
 	if !strings.EqualFold(getenv("EVENT_PUBLISHER", "log"), "kafka") {
-		return logPublisher, func() {}
+		logger.Info("event publisher configured", "publisher", "log", "mode", "direct")
+		return logPublisher, nil, func() {}
 	}
 
 	brokers := strings.Split(getenv("KAFKA_BROKERS", "localhost:9092"), ",")
 	analytics := outboundkafka.NewAnalyticsPublisher(brokers, uuid.NewString)
-	logger.Info("analytics event publishing enabled",
-		"topic", envelope.TopicLaborPerformanceAnalytics, "brokers", brokers)
-
-	return outboundkafka.NewFanOutPublisher(logPublisher, analytics), func() {
+	closeAnalytics := func() {
 		if err := analytics.Close(); err != nil {
 			logger.Error("error closing analytics kafka publisher", "error", err)
 		}
 	}
+
+	if p.pool == nil {
+		logger.Info("event publisher configured", "publisher", "kafka", "mode", "direct",
+			"topic", envelope.TopicLaborPerformanceAnalytics, "brokers", brokers)
+		return outboundkafka.NewFanOutPublisher(logPublisher, analytics), nil, closeAnalytics
+	}
+
+	sink := outboundkafka.NewRelaySink(brokers)
+	relay := postgres.NewOutboxRelay(p.pool, sink, logger,
+		postgres.WithInterval(durationEnv("OUTBOX_RELAY_INTERVAL", time.Second)))
+	logger.Info("event publisher configured", "publisher", "kafka", "mode", "outbox",
+		"topic", envelope.TopicLaborPerformanceAnalytics, "brokers", brokers)
+	outbox := postgres.NewOutboxPublisher(p.pool, analytics)
+	return outboundkafka.NewFanOutPublisher(logPublisher, outbox), relay, func() {
+		if err := sink.Close(); err != nil {
+			logger.Error("error closing outbox relay sink", "error", err)
+		}
+		closeAnalytics()
+	}
 }
 
-// buildRepoAdapters wires the Postgres adapters when DATABASE_URL is set,
+// persistence is what buildPersistence wires: the repos the use cases
+// read/write through, the Postgres pool (nil when running in-memory),
+// and the UnitOfWork that brackets Save + Publish (nil when in-memory,
+// which the use cases treat as "run them back to back").
+type persistence struct {
+	standards    ports.StandardRepo
+	performances ports.PerformanceRepo
+	processed    ports.ProcessedEvents
+	pool         *pgxpool.Pool
+	uow          ports.UnitOfWork
+	close        func()
+}
+
+// buildPersistence wires the Postgres adapters when DATABASE_URL is set,
 // or falls back to the in-memory adapters for local development without a
 // database.
-func buildRepoAdapters(ctx context.Context, databaseURL, migrationsPath string, logger *slog.Logger) (
-	ports.StandardRepo, ports.PerformanceRepo, ports.ProcessedEvents, func(), error,
-) {
-	noop := func() {}
-
+func buildPersistence(ctx context.Context, databaseURL, migrationsPath string, logger *slog.Logger) (*persistence, error) {
 	if databaseURL == "" {
 		logger.Info("database url not configured; using in-memory adapters")
-		return memory.NewStandardRepo(), memory.NewPerformanceRepo(), memory.NewProcessedEventRepo(), noop, nil
+		return &persistence{
+			standards:    memory.NewStandardRepo(),
+			performances: memory.NewPerformanceRepo(),
+			processed:    memory.NewProcessedEventRepo(),
+			close:        func() {},
+		}, nil
 	}
 
 	if err := postgres.RunMigrations(databaseURL, migrationsPath); err != nil {
-		return nil, nil, nil, noop, err
+		return nil, err
 	}
 	pool, err := postgres.NewPool(ctx, databaseURL)
 	if err != nil {
-		return nil, nil, nil, noop, err
+		return nil, err
 	}
-	return postgres.NewStandardRepo(pool), postgres.NewPerformanceRepo(pool), postgres.NewProcessedEventRepo(pool), pool.Close, nil
+	return &persistence{
+		standards:    postgres.NewStandardRepo(pool),
+		performances: postgres.NewPerformanceRepo(pool),
+		processed:    postgres.NewProcessedEventRepo(pool),
+		pool:         pool,
+		uow:          postgres.NewUnitOfWork(pool),
+		close:        pool.Close,
+	}, nil
+}
+
+// durationEnv parses key as a time.Duration, falling back on absence or a
+// malformed value (the relay interval is a tuning knob, not a contract, so
+// a typo must not fail the boot).
+func durationEnv(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
 }
 
 func getenv(key, fallback string) string {

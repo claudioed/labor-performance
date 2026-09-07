@@ -8,6 +8,13 @@
 // ports.EventPublisher they always have, the log publisher still exists
 // and is still the default, and no existing consumer of any other topic
 // is affected — because this service publishes to no other topic.
+//
+// Since ADR 0010 (transactional outbox) the publisher is split in two
+// halves: Encode turns domain events into wire-ready messages and Publish
+// writes them. In the cluster the OLTP process never calls Publish — the
+// postgres.OutboxPublisher calls Encode inside the use case's transaction
+// and stores the result, and the postgres.OutboxRelay later hands the
+// stored messages to a RelaySink.
 package kafka
 
 import (
@@ -28,6 +35,27 @@ import (
 // can substitute a recording fake without a broker.
 type Writer interface {
 	WriteMessages(ctx context.Context, msgs ...kafkago.Message) error
+}
+
+// Encoded is one wire-ready Kafka message. Topic is carried explicitly —
+// NOT on a kafkago.Message — because kafka-go rejects a message with its
+// own Topic when the Writer also has a fixed Topic, and vice versa: the
+// AnalyticsPublisher's writer pins the topic, while the RelaySink's
+// writer has none and applies Encoded.Topic per message.
+type Encoded struct {
+	Topic     string
+	EventType string
+	Key       []byte
+	Value     []byte
+	Headers   []kafkago.Header
+}
+
+// Encoder turns domain events into their Kafka wire form without sending
+// them. The transactional outbox (ADR 0010) stores what Encode returns
+// and replays it later, byte-for-byte, so the outbox and the direct
+// publish path can never disagree on wire format.
+type Encoder interface {
+	Encode(ctx context.Context, events ...shared.DomainEvent) ([]Encoded, error)
 }
 
 // AnalyticsPublisher publishes each labor-performance domain event onto
@@ -70,31 +98,59 @@ func NewAnalyticsPublisher(brokers []string, newID func() string) *AnalyticsPubl
 // domain event needs no change here to be safely ignored.
 func (p *AnalyticsPublisher) Publish(ctx context.Context, events ...shared.DomainEvent) error {
 	for _, event := range events {
-		if err := p.publishOne(ctx, event); err != nil {
+		msgs, err := p.Encode(ctx, event)
+		if err != nil {
 			return err
+		}
+		for _, msg := range msgs {
+			if err := p.write(ctx, msg); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func (p *AnalyticsPublisher) publishOne(ctx context.Context, event shared.DomainEvent) error {
-	eventType, key, data, ok := marshalData(event)
-	if !ok {
-		return nil
-	}
+// Encode maps every event to its analytics message — envelope, partition
+// key and the W3C trace headers of the span active in ctx — without
+// writing anything. Events outside the analytics contract produce no
+// message. The returned Encoded carry Topic set to the analytics topic
+// and a nil kafkago.Message.Topic (see Encoded).
+//
+// The trace context is captured HERE, not at send time, because in the
+// outbox mode the send happens later on the relay goroutine, which has
+// no request span of its own: injecting now is what lets the projector's
+// consume span still become a child of the originating request.
+func (p *AnalyticsPublisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([]Encoded, error) {
+	out := make([]Encoded, 0, len(events))
+	for _, event := range events {
+		eventType, key, data, ok := marshalData(event)
+		if !ok {
+			continue
+		}
 
-	payload, err := json.Marshal(envelope.AnalyticsEnvelope{
-		EventId:       p.newID(),
-		EventType:     eventType,
-		OccurredAt:    event.OccurredAt(),
-		Source:        envelope.Source,
-		SchemaVersion: envelope.AnalyticsSchemaVersion,
-		Data:          data,
-	})
-	if err != nil {
-		return fmt.Errorf("kafka: marshal analytics envelope: %w", err)
+		payload, err := json.Marshal(envelope.AnalyticsEnvelope{
+			EventId:       p.newID(),
+			EventType:     eventType,
+			OccurredAt:    event.OccurredAt(),
+			Source:        envelope.Source,
+			SchemaVersion: envelope.AnalyticsSchemaVersion,
+			Data:          data,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("kafka: marshal analytics envelope: %w", err)
+		}
+		headers := []kafkago.Header{}
+		otelkafka.Inject(ctx, &headers)
+		out = append(out, Encoded{
+			Topic:     envelope.TopicLaborPerformanceAnalytics,
+			EventType: eventType,
+			Key:       []byte(key),
+			Value:     payload,
+			Headers:   headers,
+		})
 	}
-	return p.write(ctx, eventType, key, payload)
+	return out, nil
 }
 
 // newID mints an envelope event id, returning "" only when no generator
@@ -109,7 +165,7 @@ func (p *AnalyticsPublisher) newID() string {
 
 // marshalData maps a domain event to its analytics event_type, partition
 // key, and snake_case JSON payload. The bool return is false for an event
-// type outside the analytics contract, so publishOne can skip it.
+// type outside the analytics contract, so Encode can skip it.
 //
 // The partition key is the TaskType for every event: it keeps all the
 // events that fold into one report dimension on a single partition, so
@@ -162,24 +218,24 @@ func mustMarshal(v any) json.RawMessage {
 	return b
 }
 
-// write publishes one already-marshalled envelope inside a producer span,
+// write publishes one already-encoded message inside a producer span,
 // injecting that span's context into the message headers so the
 // projector's consume span becomes its child.
-func (p *AnalyticsPublisher) write(ctx context.Context, eventType, key string, payload []byte) error {
+func (p *AnalyticsPublisher) write(ctx context.Context, msg Encoded) error {
 	ctx, span := otelkafka.StartPublishSpan(ctx, envelope.TopicLaborPerformanceAnalytics)
 	defer span.End()
 
-	headers := []kafkago.Header{}
+	headers := append([]kafkago.Header{}, msg.Headers...)
 	otelkafka.Inject(ctx, &headers)
 
 	if err := p.Writer.WriteMessages(ctx, kafkago.Message{
-		Key:     []byte(key),
-		Value:   payload,
+		Key:     msg.Key,
+		Value:   msg.Value,
 		Headers: headers,
 	}); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		return fmt.Errorf("kafka: publish %s analytics event: %w", eventType, err)
+		return fmt.Errorf("kafka: publish %s analytics event: %w", msg.EventType, err)
 	}
 	return nil
 }
@@ -192,6 +248,9 @@ func (p *AnalyticsPublisher) Close() error {
 	return nil
 }
 
-// Compile-time assertion that AnalyticsPublisher satisfies the outbound
-// event-publishing port.
-var _ ports.EventPublisher = (*AnalyticsPublisher)(nil)
+// Compile-time assertions that AnalyticsPublisher satisfies the outbound
+// event-publishing port and the outbox's Encoder.
+var (
+	_ ports.EventPublisher = (*AnalyticsPublisher)(nil)
+	_ Encoder              = (*AnalyticsPublisher)(nil)
+)

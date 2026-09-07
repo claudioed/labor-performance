@@ -89,12 +89,15 @@ internal/
                                                        (TaskCompleted only, OLTP)
                                    analytics_consumer.go — warehouse.labor-performance
                                                        .analytics (projector)
-    outbound/postgres/            pgxpool repos + golang-migrate runner (OLTP DB)
+    outbound/postgres/            pgxpool repos + golang-migrate runner (OLTP DB);
+                                   unit_of_work.go, outbox_publisher.go, outbox_relay.go
+                                   — the transactional outbox (ADR 0010)
     outbound/analyticsstore/      analytical DB: writer projection, read-only
                                    reader, in-memory store for tests
     outbound/memory/              in-memory repos for tests/local
     outbound/events/              log publisher (the default)
-    outbound/kafka/               analytics publisher + fan-out (EVENT_PUBLISHER=kafka)
+    outbound/kafka/               analytics publisher (Encode + Publish), relay sink,
+                                   fan-out (EVENT_PUBLISHER=kafka)
     outbound/telemetry/           OTel traces/metrics/logs (copied from workforce-management)
 migrations/                       golang-migrate SQL files (OLTP schema)
 migrations/analytics/             golang-migrate SQL files (analytical schema)
@@ -140,6 +143,15 @@ struct tags in the domain packages.
   `event_id` twice is a no-op, never a double-count. Keyed on `event_id`,
   not `TaskId`, since a task id could in principle be reused after a long
   time.
+- **Every write and its event commit together.** With Postgres and
+  `EVENT_PUBLISHER=kafka`, a use case's Saves, the `processed_events`
+  marker and the analytics event are one transaction: the event goes into
+  an `outbox_events` row, and an in-process relay ships it to
+  `warehouse.labor-performance.analytics` within `OUTBOX_RELAY_INTERVAL`.
+  The OLTP store and the analytics topic can no longer diverge, and a
+  consumer redelivery after a partial failure is scored rather than
+  dropped as a duplicate. See
+  [ADR 0010](docs/docs/adr/0010-transactional-outbox.md).
 
 ## Running locally
 
@@ -218,6 +230,8 @@ curl -s localhost:8080/associates/assoc-1/scorecard
 | `MIGRATIONS_PATH` | `migrations` | golang-migrate source directory. |
 | `KAFKA_BROKERS` | `localhost:9092` | Comma-separated broker addresses. |
 | `KAFKA_CONSUMER_GROUP` | `labor-performance` | Consumer group id on `warehouse.fulfillment.events`. |
+| `EVENT_PUBLISHER` | `log` | `log` or `kafka`. With `kafka`, domain events are fanned onto `warehouse.labor-performance.analytics`; when `DATABASE_URL` is also set they go through the transactional outbox (`outbox_events` + in-process relay, [ADR 0010](docs/docs/adr/0010-transactional-outbox.md)), otherwise straight to the broker. |
+| `OUTBOX_RELAY_INTERVAL` | `1s` | How long the outbox relay sleeps between passes that found nothing to publish (Go duration; only used in outbox mode). |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:5187` | Comma-separated allowed origins. |
 | `OTEL_SERVICE_NAME` | `labor-performance` | OTel `service.name` resource attribute. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP/gRPC Collector endpoint. |
@@ -335,6 +349,8 @@ Additional verification surfaces, each with its own CI job:
 go test ./... -run TestFeatures -v                  # BDD (godog/Gherkin)
 go test ./internal/architecture/... -v               # arch-fitness (arch-go)
 go test -tags=integration ./... -race -count=1       # Postgres + Kafka integration
+go test -tags=integration ./internal/adapters/outbound/postgres/ -run Outbox -race -count=1
+                                                     # outbox: testcontainers Postgres, needs Docker only
 gremlins unleash ./internal/domain                    # mutation testing (see .gremlins.yaml)
 ct lint --charts charts/labor-performance \
   --validate-maintainers=false --check-version-increment=false
@@ -447,6 +463,9 @@ and have since been added, bringing this service to full fleet parity with
 2. [0002 — A new bounded context, not an extension of workforce-management or fulfillment-execution](docs/docs/adr/0002-new-bounded-context-not-extension-of-workforce-or-fulfillment.md)
 3. [0003 — Kafka choreography consumer of fulfillment-execution, no REST dependency](docs/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution.md)
 4. [0004 — StandardSecondsAtCompletion is frozen at ingestion time, never recomputed](docs/docs/adr/0004-standard-frozen-at-completion-time-not-recomputed.md)
+10. [0010 — Transactional outbox for the analytics topic](docs/docs/adr/0010-transactional-outbox.md)
+
+The full, current list (0001–0010) is in [docs/docs/adr/about.md](docs/docs/adr/about.md).
 
 ## License
 
