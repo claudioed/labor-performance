@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/claudioed/labor-performance/internal/adapters/inbound/auth"
 	inboundmcp "github.com/claudioed/labor-performance/internal/adapters/inbound/mcp"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
@@ -64,8 +65,8 @@ func newServer(t *testing.T) string {
 		GetStandard:            &usecases.GetStandard{Standards: standards},
 	}
 	server := inboundmcp.NewServer(deps)
-	auth := inboundmcp.NewStaticKeyAuth(map[string]inboundmcp.Scope{readKey: inboundmcp.ScopeRead})
-	httpSrv := httptest.NewServer(inboundmcp.Handler(server, auth))
+	authn := auth.NewStaticKeyAuth(map[string]auth.Scope{readKey: auth.ScopeRead})
+	httpSrv := httptest.NewServer(inboundmcp.Handler(server, authn))
 	t.Cleanup(httpSrv.Close)
 	return httpSrv.URL
 }
