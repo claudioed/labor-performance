@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/claudioed/labor-performance/internal/adapters/inbound/auth"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 )
@@ -97,25 +98,25 @@ func (d Deps) getLaborStandard(ctx context.Context, in laborStandardInput) (stan
 // session's scope.
 //
 // labor-performance exposes no write use case over MCP (see Deps' own doc
-// comment): every registered tool is a read tool and requires ScopeRead.
+// comment): every registered tool is a read tool and requires auth.ScopeRead.
 // The scope-parameterised addTool wrapper is kept identical to the other
 // contexts anyway, so a legitimate future write tool needs no auth rework.
-func (d Deps) registerTools(server *mcp.Server, scopeOf func(context.Context) Scope) {
+func (d Deps) registerTools(server *mcp.Server, scopeOf func(context.Context) auth.Scope) {
 	readOnly := true
 
-	addTool(server, scopeOf, ScopeRead, &mcp.Tool{
+	addTool(server, scopeOf, auth.ScopeRead, &mcp.Tool{
 		Name:        "get_associate_scorecard",
 		Description: "Return one associate's performance scorecard: task count, mean efficiency percent, a per-task-type breakdown, and a trend/coaching-flag signal computed over their most recent tasks. Use it to answer 'how is this associate doing' questions. The coaching flag is a visibility signal only, never an automated action -- surface it to a human, do not act on it autonomously.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, d.getAssociateScorecard)
 
-	addTool(server, scopeOf, ScopeRead, &mcp.Tool{
+	addTool(server, scopeOf, auth.ScopeRead, &mcp.Tool{
 		Name:        "get_task_type_performance",
 		Description: "Return the fleet-wide (all-associates) performance read model for one task type (PICK, PACK, or SLAM): task count, mean efficiency percent, and the real measured mean duration. Use it to answer 'how is this task type performing across the whole floor' questions, independent of any single associate.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, d.getTaskTypePerformance)
 
-	addTool(server, scopeOf, ScopeRead, &mcp.Tool{
+	addTool(server, scopeOf, auth.ScopeRead, &mcp.Tool{
 		Name:        "get_labor_standard",
 		Description: "Return the currently-active engineered labor standard (expected seconds) for one task type. Use it to answer 'what is the target pace for this task type' questions, e.g. before judging whether an observed pace is fast or slow.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
@@ -126,11 +127,11 @@ func (d Deps) registerTools(server *mcp.Server, scopeOf func(context.Context) Sc
 // concerns every tool shares: a span per call, scope enforcement against the
 // tool's required minimum scope, and mapping a handler error onto the span
 // before returning it. It is parameterised on the required scope so a future
-// write tool (ScopeReadWrite) reuses it unchanged.
+// write tool (auth.ScopeReadWrite) reuses it unchanged.
 func addTool[In, Out any](
 	server *mcp.Server,
-	scopeOf func(context.Context) Scope,
-	required Scope,
+	scopeOf func(context.Context) auth.Scope,
+	required auth.Scope,
 	tool *mcp.Tool,
 	handle func(context.Context, In) (Out, error),
 ) {
@@ -144,7 +145,7 @@ func addTool[In, Out any](
 		)
 		defer span.End()
 
-		if !scopeAllows(scopeOf(ctx), required) {
+		if !auth.Allows(scopeOf(ctx), required) {
 			err := fmt.Errorf("tool %q requires %s scope", tool.Name, required)
 			span.SetStatus(codes.Error, "unauthorized")
 			return nil, zero, err
