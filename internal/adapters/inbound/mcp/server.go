@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/claudioed/labor-performance/internal/adapters/inbound/auth"
 )
 
 // scopeKey is the context key under which the authenticated scope is carried
@@ -12,9 +14,9 @@ import (
 type scopeKey struct{}
 
 // scopeFromContext returns the scope stored by the auth middleware, or the
-// empty scope if none is present (which scopeAllows treats as unauthorized).
-func scopeFromContext(ctx context.Context) Scope {
-	if s, ok := ctx.Value(scopeKey{}).(Scope); ok {
+// empty scope if none is present (which auth.Allows treats as unauthorized).
+func scopeFromContext(ctx context.Context) auth.Scope {
+	if s, ok := ctx.Value(scopeKey{}).(auth.Scope); ok {
 		return s
 	}
 	return ""
@@ -48,13 +50,15 @@ func NewServer(deps Deps) *mcp.Server {
 // it grants is placed in the request context for handlers to enforce per-tool.
 //
 // This is the single seam described in ADR-0009 ("MCP inbound adapter"):
-// replacing StaticKeyAuth with an OAuth 2.1 resource-server Authenticator
-// changes only what is passed here, not any handler.
-func Handler(server *mcp.Server, auth Authenticator) http.Handler {
+// replacing auth.StaticKeyAuth with an OAuth 2.1 resource-server
+// auth.Authenticator changes only what is passed here, not any handler.
+// The Authenticator itself lives in internal/adapters/inbound/auth (ADR
+// 0011) and is shared with the REST router.
+func Handler(server *mcp.Server, authn auth.Authenticator) http.Handler {
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		scope, ok := auth.Authenticate(r)
+		scope, ok := authn.Authenticate(r)
 		if !ok {
 			// Signal how to authenticate without leaking any detail about why
 			// the credential failed.

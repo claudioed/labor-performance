@@ -56,6 +56,7 @@ spec:
               value: {{ .Values.config.kafkaConsumerGroup | quote }}
             - name: CORS_ALLOWED_ORIGINS
               value: {{ .Values.config.corsAllowedOrigins | quote }}
+            {{- include "labor-performance.authEnv" . | nindent 12 }}
             {{- if .Values.otel.enabled }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}

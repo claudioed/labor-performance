@@ -14,6 +14,7 @@ import (
 	"github.com/riandyrn/otelchi"
 	otelchimetric "github.com/riandyrn/otelchi/metric"
 
+	"github.com/claudioed/labor-performance/internal/adapters/inbound/auth"
 	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
@@ -30,6 +31,29 @@ type Server struct {
 	GetStandard            *usecases.GetStandard
 	GetAssociateScorecard  *usecases.GetAssociateScorecard
 	GetTaskTypePerformance *usecases.GetTaskTypePerformance
+
+	// Auth is the fleet-standard REST identity middleware (ADR 0011). It
+	// is mounted on every route except /healthz. A nil Auth means the
+	// middleware runs in auth.ModeOff — the composition root decides the
+	// real mode, so handler tests that build a Server without keys are
+	// unaffected.
+	Auth *auth.Middleware
+}
+
+// authMiddleware resolves the auth middleware to mount: the configured
+// one, or a no-op (ModeOff) when the composition root supplied none.
+func authMiddleware(m *auth.Middleware, required func(*http.Request) auth.Scope) func(http.Handler) http.Handler {
+	if m == nil {
+		return auth.Middleware{Mode: auth.ModeOff}.Handler
+	}
+	mw := *m
+	if mw.ProblemBase == "" {
+		mw.ProblemBase = problemBaseURI
+	}
+	if required != nil {
+		mw.Required = required
+	}
+	return mw.Handler
 }
 
 // NewRouter builds the chi router for every endpoint in CLAUDE.md's REST
@@ -60,11 +84,19 @@ func NewRouter(s *Server, logger *slog.Logger, serviceName string) http.Handler 
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware())
 
+	// /healthz stays outside the auth group so kubelet probes never need
+	// a credential (ADR 0011).
 	r.Get("/healthz", s.handleHealthz)
-	r.Post("/standards", s.handleDefineStandard)
-	r.Get("/standards/{taskType}", s.handleGetStandard)
-	r.Get("/associates/{associateId}/scorecard", s.handleGetAssociateScorecard)
-	r.Get("/task-types/{taskType}/performance", s.handleGetTaskTypePerformance)
+
+	r.Group(func(r chi.Router) {
+		// Fleet policy: GET/HEAD/OPTIONS need read, everything else
+		// read-write (auth.RequiredFor).
+		r.Use(authMiddleware(s.Auth, nil))
+		r.Post("/standards", s.handleDefineStandard)
+		r.Get("/standards/{taskType}", s.handleGetStandard)
+		r.Get("/associates/{associateId}/scorecard", s.handleGetAssociateScorecard)
+		r.Get("/task-types/{taskType}/performance", s.handleGetTaskTypePerformance)
+	})
 
 	return r
 }
