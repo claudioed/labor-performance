@@ -33,43 +33,60 @@ type RecordTaskPerformance struct {
 	Processed    ports.ProcessedEvents
 	Events       ports.EventPublisher
 	Clock        ports.Clock
+	// UnitOfWork brackets MarkProcessed + Save + Publish atomically (ADR
+	// 0010). Optional: nil means the calls run back to back, which is
+	// the in-memory / log-publisher dev configuration.
+	UnitOfWork ports.UnitOfWork
 }
 
 // Execute returns (nil, nil) when req.KafkaEventId was already processed
 // — a benign no-op, not an error, so a consumer redelivery never appears
 // as a failure.
+//
+// The idempotency marker, the TaskPerformance row and the
+// TaskPerformanceRecorded event are written in ONE atomic scope: if any
+// of them fails, none survives, so a redelivered message after a partial
+// failure is scored (the marker was rolled back too) rather than silently
+// dropped as a "duplicate" of a row that never existed.
 func (uc *RecordTaskPerformance) Execute(ctx context.Context, req RecordTaskPerformanceRequest) (*performance.TaskPerformance, error) {
-	isNew, err := uc.Processed.MarkProcessed(ctx, req.KafkaEventId)
-	if err != nil {
-		return nil, err
-	}
-	if !isNew {
-		return nil, nil
-	}
-
-	var standardSecondsAtCompletion int64
-	if req.TaskType != "" {
-		active, err := uc.Standards.FindActiveAsOf(ctx, req.TaskType, req.CompletedAt)
+	var p *performance.TaskPerformance
+	err := atomically(ctx, uc.UnitOfWork, func(ctx context.Context) error {
+		isNew, err := uc.Processed.MarkProcessed(ctx, req.KafkaEventId)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if active != nil {
-			standardSecondsAtCompletion = active.ExpectedSeconds()
+		if !isNew {
+			return nil
 		}
-	}
 
-	p, err := performance.New(req.KafkaEventId, req.TaskId, req.AssociateId, req.TaskType, req.ActualSeconds, standardSecondsAtCompletion, req.CompletedAt)
+		var standardSecondsAtCompletion int64
+		if req.TaskType != "" {
+			active, err := uc.Standards.FindActiveAsOf(ctx, req.TaskType, req.CompletedAt)
+			if err != nil {
+				return err
+			}
+			if active != nil {
+				standardSecondsAtCompletion = active.ExpectedSeconds()
+			}
+		}
+
+		recorded, err := performance.New(req.KafkaEventId, req.TaskId, req.AssociateId, req.TaskType, req.ActualSeconds, standardSecondsAtCompletion, req.CompletedAt)
+		if err != nil {
+			return err
+		}
+
+		if err := uc.Performances.Save(ctx, recorded); err != nil {
+			return err
+		}
+
+		if err := uc.Events.Publish(ctx, shared.NewTaskPerformanceRecorded(uc.Clock.Now(), recorded.TaskId(), recorded.AssociateId(), recorded.TaskType(), recorded.ActualSeconds(), recorded.EfficiencyPct(), recorded.CompletedAt())); err != nil {
+			return err
+		}
+		p = recorded
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	if err := uc.Performances.Save(ctx, p); err != nil {
-		return nil, err
-	}
-
-	if err := uc.Events.Publish(ctx, shared.NewTaskPerformanceRecorded(uc.Clock.Now(), p.TaskId(), p.AssociateId(), p.TaskType(), p.ActualSeconds(), p.EfficiencyPct(), p.CompletedAt())); err != nil {
-		return nil, err
-	}
-
 	return p, nil
 }

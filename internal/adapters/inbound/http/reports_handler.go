@@ -234,6 +234,7 @@ func NewReportsRouter(h *ReportsHandlers, logger *slog.Logger) http.Handler {
 	r.Use(readOnlyCORSMiddleware())
 
 	r.Get("/healthz", h.GetReportsHealthz)
+
 	r.Get("/reports/performance", h.GetPerformanceReport)
 	r.Get("/reports/performance/freshness", h.GetPerformanceFreshness)
 

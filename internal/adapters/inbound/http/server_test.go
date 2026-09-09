@@ -45,7 +45,7 @@ func newTestEnv(t *testing.T, now time.Time) *testEnv {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	return &testEnv{
-		handler:      inboundhttp.NewRouter(server, logger),
+		handler:      inboundhttp.NewRouter(server, logger, ""),
 		standards:    standards,
 		performances: performances,
 	}

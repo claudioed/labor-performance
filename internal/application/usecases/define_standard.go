@@ -18,6 +18,15 @@ type DefineStandard struct {
 	Standards ports.StandardRepo
 	Events    ports.EventPublisher
 	Clock     ports.Clock
+	// UnitOfWork brackets the Save(s) + Publish atomically (ADR 0010).
+	// Optional: a nil value means "no transactional backing" and the
+	// calls run back to back, which is exactly the in-memory /
+	// log-publisher dev configuration.
+	UnitOfWork ports.UnitOfWork
+	// Metrics records the labor_performance.standards.defined business
+	// counter (fleet-standard-metrics ADR, Tier 2), split by outcome
+	// (accepted/rejected). Nil is a valid "not instrumented" value.
+	Metrics ports.StandardMetrics
 }
 
 func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType, expectedSeconds int64) (*standard.LaborStandard, error) {
@@ -35,29 +44,49 @@ func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType,
 
 	next, err := standard.New(id, taskType, expectedSeconds, now)
 	if err != nil {
+		if uc.Metrics != nil {
+			uc.Metrics.StandardDefinitionRejected(ctx)
+		}
 		return nil, err
 	}
 
-	if prior != nil {
-		prior.Close(now)
-		if err := uc.Standards.Save(ctx, prior); err != nil {
-			return nil, err
+	// Closing the prior standard, saving the new one and publishing the
+	// event are one business fact ("the standard changed") and must
+	// commit together or not at all.
+	err = atomically(ctx, uc.UnitOfWork, func(ctx context.Context) error {
+		if prior != nil {
+			prior.Close(now)
+			if err := uc.Standards.Save(ctx, prior); err != nil {
+				return err
+			}
 		}
-	}
 
-	if err := uc.Standards.Save(ctx, next); err != nil {
+		if err := uc.Standards.Save(ctx, next); err != nil {
+			return err
+		}
+
+		if prior != nil {
+			return uc.Events.Publish(ctx, shared.NewLaborStandardRevised(now, id, taskType, prior.ExpectedSeconds(), expectedSeconds, now))
+		}
+		return uc.Events.Publish(ctx, shared.NewLaborStandardDefined(now, id, taskType, expectedSeconds, now))
+	})
+	if err != nil {
 		return nil, err
 	}
 
-	if prior != nil {
-		if err := uc.Events.Publish(ctx, shared.NewLaborStandardRevised(now, id, taskType, prior.ExpectedSeconds(), expectedSeconds, now)); err != nil {
-			return nil, err
-		}
-	} else {
-		if err := uc.Events.Publish(ctx, shared.NewLaborStandardDefined(now, id, taskType, expectedSeconds, now)); err != nil {
-			return nil, err
-		}
+	if uc.Metrics != nil {
+		uc.Metrics.StandardDefinitionAccepted(ctx)
 	}
 
 	return next, nil
+}
+
+// atomically runs fn inside uow when one is wired, or directly otherwise.
+// Keeping this in one place means every use case treats a nil UnitOfWork
+// identically instead of each re-deciding the fallback.
+func atomically(ctx context.Context, uow ports.UnitOfWork, fn func(ctx context.Context) error) error {
+	if uow == nil {
+		return fn(ctx)
+	}
+	return uow.Execute(ctx, fn)
 }

@@ -25,7 +25,7 @@ COVERAGE_THRESHOLD := 90
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build vet fmt fmt-check lint test coverage check check-all integration-kafka
+.PHONY: help build vet fmt fmt-check lint test coverage check check-all integration-kafka-testcontainers
 
 help:
 	@echo "labor-performance — local quality gate (targets mirror .github/workflows/ci.yml)"
@@ -38,7 +38,7 @@ help:
 	@echo "  lint              golangci-lint run ./... (pinned $(GOLANGCI_VERSION) in CI)"
 	@echo "  test              go test ./... -race — unit + httptest + fake-reader kafka, no broker/DB needed"
 	@echo "  coverage          CI coverage command + the $(COVERAGE_THRESHOLD)% gate"
-	@echo "  integration-kafka Build-tagged Kafka consumer test against a real broker (needs KAFKA_BROKERS)"
+	@echo "  integration-kafka-testcontainers  Build-tagged Kafka consumer test with an isolated Testcontainers broker"
 	@echo ""
 	@echo "  check             FAST bundle: fmt-check vet build lint test"
 	@echo "  check-all         check + coverage — run this before pushing"
@@ -83,9 +83,8 @@ coverage:
 		exit 1; \
 	fi
 
-# Requires a running broker: docker compose -f docker-compose.kafka.yml up -d
-# (or the fleet's shared broker) and KAFKA_BROKERS set. Skipped without it.
-integration-kafka:
+# Starts an isolated Kafka Testcontainers broker; no external broker is needed.
+integration-kafka-testcontainers:
 	$(GO) test -tags=integration ./internal/adapters/inbound/kafka/... -run TestConsumer_ProjectsRealBrokerMessages -v
 
 # The fast self-correction loop: run this after every change, before committing.

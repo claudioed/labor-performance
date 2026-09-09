@@ -121,6 +121,23 @@ type EventPublisher interface {
 	Publish(ctx context.Context, events ...shared.DomainEvent) error
 }
 
+// UnitOfWork brackets a use case's state change and the domain events it
+// raises so both commit or neither does (ADR 0010, transactional outbox).
+//
+// Execute runs fn inside one atomic scope. Every Repo.Save,
+// ProcessedEvents.MarkProcessed and EventPublisher.Publish made with the
+// ctx handed to fn is bound to that same scope: if fn returns an error
+// the scope is rolled back and nothing — neither the aggregate row, nor
+// the idempotency marker, nor the outbox row — is visible afterwards.
+//
+// Adapters that have no transactional backing (the in-memory repos, the
+// log publisher) satisfy this with a pass-through that simply calls fn;
+// the use cases stay adapter-agnostic either way and treat a nil
+// UnitOfWork as exactly that pass-through.
+type UnitOfWork interface {
+	Execute(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 // ProcessedEvents is the idempotency gate for at-least-once Kafka
 // consumption of TaskCompleted, keyed on the message's event_id rather
 // than TaskId (which could in principle be reused after a very long
@@ -140,4 +157,23 @@ type ProcessedEvents interface {
 // time.Now() directly.
 type Clock interface {
 	Now() time.Time
+}
+
+// StandardMetrics records DefineStandard outcomes (fleet-standard-metrics
+// ADR, Tier 2) so the business signal — how often a caller's attempt to
+// set an engineered labor standard actually takes effect versus gets
+// rejected for violating the one aggregate invariant (ExpectedSeconds must
+// be > 0) — is observable independently of HTTP traffic. Use cases treat a
+// nil value as "not instrumented", so wiring it is optional, mirroring
+// inventory-storage's ports.ReservationMetrics.
+type StandardMetrics interface {
+	// StandardDefinitionAccepted records a DefineStandard call that
+	// persisted successfully (first definition or revision — both are
+	// the same business event: a caller's requested standard took
+	// effect).
+	StandardDefinitionAccepted(ctx context.Context)
+	// StandardDefinitionRejected records a DefineStandard call rejected
+	// for a non-positive ExpectedSeconds — a caller submitted a standard
+	// that is not a business fact (see standard.ErrNonPositiveExpectedSeconds).
+	StandardDefinitionRejected(ctx context.Context)
 }

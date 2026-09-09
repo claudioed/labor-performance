@@ -58,11 +58,18 @@ type Consumer struct {
 // NewConsumer constructs a Consumer reading TopicFulfillmentEvents on
 // brokers under groupID.
 func NewConsumer(brokers []string, groupID string, recordTaskPerformance *usecases.RecordTaskPerformance, logger *slog.Logger) *Consumer {
+	return NewConsumerForTopic(brokers, groupID, envelope.TopicFulfillmentEvents, recordTaskPerformance, logger)
+}
+
+// NewConsumerForTopic constructs a Consumer reading topic on brokers under
+// groupID. It supports isolated integration topics while NewConsumer retains
+// the production fulfillment-events topic.
+func NewConsumerForTopic(brokers []string, groupID, topic string, recordTaskPerformance *usecases.RecordTaskPerformance, logger *slog.Logger) *Consumer {
 	return &Consumer{
 		reader: kafkago.NewReader(kafkago.ReaderConfig{
 			Brokers: brokers,
 			GroupID: groupID,
-			Topic:   envelope.TopicFulfillmentEvents,
+			Topic:   topic,
 		}),
 		recordTaskPerformance: recordTaskPerformance,
 		logger:                logger,

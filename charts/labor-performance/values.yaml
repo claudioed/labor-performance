@@ -46,6 +46,23 @@ ingress:
           pathType: Prefix
   tls: []
 
+# Additive, disabled-by-default alternative to the ingress: block above.
+# Mirrors the shape verified live in warehouse-infra's fulfillment-execution
+# Gateway API pilot (Kong Ingress Controller routing HTTPRoute traffic via a
+# GatewayClass annotated konghq.com/gatewayclass-unmanaged: "true"). Routes
+# only to this chart's main REST API Service (same Service ingress.yaml
+# already targets) — never to the reports/projector components.
+gatewayApi:
+  enabled: false
+  parentRefs:
+    - name: ""
+      namespace: ""
+      sectionName: "http"
+  hosts:
+    - path: /
+      pathType: PathPrefix
+  stripPath: true
+
 resources:
   limits:
     cpu: 500m

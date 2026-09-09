@@ -103,3 +103,20 @@ func (p *failingProcessedEvents) MarkProcessed(ctx context.Context, eventId stri
 	}
 	return true, nil
 }
+
+// fakeStandardMetrics records how many times each ports.StandardMetrics
+// method was called, so DefineStandard's tests can assert the metrics
+// port is invoked on exactly the right outcome without depending on a
+// real OTel MeterProvider.
+type fakeStandardMetrics struct {
+	accepted int
+	rejected int
+}
+
+func (f *fakeStandardMetrics) StandardDefinitionAccepted(ctx context.Context) {
+	f.accepted++
+}
+
+func (f *fakeStandardMetrics) StandardDefinitionRejected(ctx context.Context) {
+	f.rejected++
+}

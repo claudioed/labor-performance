@@ -80,7 +80,9 @@ func run() error {
 	}
 	defer pool.Close()
 
-	handlers := &inboundhttp.ReportsHandlers{Store: analyticsstore.NewPostgresReport(pool)}
+	handlers := &inboundhttp.ReportsHandlers{
+		Store: analyticsstore.NewPostgresReport(pool),
+	}
 	srv := &http.Server{
 		Addr:              httpAddr,
 		Handler:           inboundhttp.NewReportsRouter(handlers, logger),
