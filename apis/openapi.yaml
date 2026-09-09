@@ -24,14 +24,11 @@ tags:
     description: Actual-vs-standard performance read models
   - name: health
     description: Liveness probe
-security:
-  - bearerAuth: []
 paths:
   /healthz:
     get:
       tags: [health]
       operationId: getHealthz
-      security: []
       summary: Liveness probe
       description: Reports whether the service process is up and able to serve requests.
       responses:
@@ -61,10 +58,6 @@ paths:
             schema:
               $ref: "#/components/schemas/DefineStandardRequest"
       responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
         "201":
           description: Standard defined (or the revision recorded)
           content:
@@ -95,8 +88,6 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TaskTypePathParam"
       responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "200":
           description: The currently-active standard
           content:
@@ -132,8 +123,6 @@ paths:
           schema:
             type: string
       responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "200":
           description: The associate's scorecard
           content:
@@ -158,8 +147,6 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TaskTypePathParam"
       responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "200":
           description: The fleet-wide task-type performance read model
           content:
@@ -173,35 +160,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
 components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      description: >
-        Fleet-standard static bearer key (ADR 0011; warehouse-ops-agent ADR
-        0005 fleet-wide). A key granting the `read` scope satisfies GET /
-        HEAD / OPTIONS; every other method requires a key granting
-        `read-write`. A missing or invalid credential is a 401
-        application/problem+json with `WWW-Authenticate`; an under-scoped
-        one is a 403. Not required by /healthz.
-  responses:
-    Unauthorized:
-      description: Missing or invalid bearer credential
-      headers:
-        WWW-Authenticate:
-          schema:
-            type: string
-            example: Bearer realm="warehouse-systems"
-      content:
-        application/problem+json:
-          schema:
-            $ref: "#/components/schemas/ProblemDetails"
-    Forbidden:
-      description: The credential does not grant the scope this operation requires
-      content:
-        application/problem+json:
-          schema:
-            $ref: "#/components/schemas/ProblemDetails"
   parameters:
     TaskTypePathParam:
       name: taskType

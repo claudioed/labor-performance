@@ -8,7 +8,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/claudioed/labor-performance/internal/adapters/inbound/auth"
 	"github.com/claudioed/labor-performance/internal/analytics/report"
 )
 
@@ -18,11 +17,6 @@ import (
 // never on the writer (ADR-0007).
 type ReportsHandlers struct {
 	Store report.ReportStore
-
-	// Auth is the fleet-standard REST identity middleware (ADR 0011),
-	// mounted on every /reports/* route with the required scope fixed to
-	// read — the reports reader has no write surface. nil means ModeOff.
-	Auth *auth.Middleware
 }
 
 // reportRowDTO is the wire shape of one (taskType, hour) report row. It
@@ -241,11 +235,8 @@ func NewReportsRouter(h *ReportsHandlers, logger *slog.Logger) http.Handler {
 
 	r.Get("/healthz", h.GetReportsHealthz)
 
-	r.Group(func(r chi.Router) {
-		r.Use(authMiddleware(h.Auth, func(*http.Request) auth.Scope { return auth.ScopeRead }))
-		r.Get("/reports/performance", h.GetPerformanceReport)
-		r.Get("/reports/performance/freshness", h.GetPerformanceFreshness)
-	})
+	r.Get("/reports/performance", h.GetPerformanceReport)
+	r.Get("/reports/performance/freshness", h.GetPerformanceFreshness)
 
 	return r
 }
