@@ -8,6 +8,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/claudioed/labor-performance/internal/adapters/inbound/auth"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 )
 
@@ -24,7 +25,7 @@ const scorecardURIScheme = "scorecard://labor/"
 // The resource is registered as a template (scorecard://labor/{associateId})
 // so a client can read any associate's scorecard by URI without a
 // per-associate registration.
-func (d Deps) registerResources(server *mcp.Server, scopeOf func(context.Context) Scope) {
+func (d Deps) registerResources(server *mcp.Server, scopeOf func(context.Context) auth.Scope) {
 	server.AddResourceTemplate(&mcp.ResourceTemplate{
 		URITemplate: scorecardURIScheme + "{associateId}",
 		Name:        "associate scorecard",
@@ -32,7 +33,7 @@ func (d Deps) registerResources(server *mcp.Server, scopeOf func(context.Context
 		MIMEType:    "application/json",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		uri := req.Params.URI
-		if !scopeAllows(scopeOf(ctx), ScopeRead) {
+		if !auth.Allows(scopeOf(ctx), auth.ScopeRead) {
 			return nil, fmt.Errorf("resource %q requires read scope", uri)
 		}
 		associateId, ok := strings.CutPrefix(uri, scorecardURIScheme)

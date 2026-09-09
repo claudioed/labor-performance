@@ -233,6 +233,9 @@ curl -s localhost:8080/associates/assoc-1/scorecard
 | `EVENT_PUBLISHER` | `log` | `log` or `kafka`. With `kafka`, domain events are fanned onto `warehouse.labor-performance.analytics`; when `DATABASE_URL` is also set they go through the transactional outbox (`outbox_events` + in-process relay, [ADR 0010](docs/docs/adr/0010-transactional-outbox.md)), otherwise straight to the broker. |
 | `OUTBOX_RELAY_INTERVAL` | `1s` | How long the outbox relay sleeps between passes that found nothing to publish (Go duration; only used in outbox mode). |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:5187` | Comma-separated allowed origins. |
+| `AUTH_MODE` | `enforce` if a key is set, else `off` | REST identity mode ([ADR 0011](docs/docs/adr/0011-rest-auth-static-bearer-scopes.md)): `enforce` rejects unauthenticated/under-scoped requests (401/403, RFC 7807); `log` lets them through but logs `auth: would-reject`; `off` disables the middleware (a WARN is logged). Also read by `cmd/labor-reports`. |
+| `API_READ_KEY` | *(unset)* | Static bearer key granting the `read` scope (`GET`/`HEAD`/`OPTIONS`, and every `/reports/*` route). Falls back to `MCP_READ_KEY`. |
+| `API_READWRITE_KEY` | *(unset)* | Static bearer key granting the `read-write` scope (required by `POST /standards`). Falls back to `MCP_READWRITE_KEY`. |
 | `OTEL_SERVICE_NAME` | `labor-performance` | OTel `service.name` resource attribute. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP/gRPC Collector endpoint. |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
@@ -249,6 +252,12 @@ Four endpoints plus a liveness probe. The full contract, including the RFC
 | `GET` | `/associates/{associateId}/scorecard` | GetAssociateScorecard |
 | `GET` | `/task-types/{taskType}/performance` | GetTaskTypePerformance |
 | `GET` | `/healthz` | Liveness probe |
+
+Every route except `/healthz` requires a bearer key
+(`Authorization: Bearer <key>`): `GET` routes accept the `read` or the
+`read-write` key, `POST /standards` requires the `read-write` key. With no
+key configured the middleware is off — see `AUTH_MODE` above and
+[ADR 0011](docs/docs/adr/0011-rest-auth-static-bearer-scopes.md).
 
 There is deliberately **no** REST endpoint for `RecordTaskPerformance` —
 it is exclusively Kafka-consumer-driven (see
@@ -464,8 +473,9 @@ and have since been added, bringing this service to full fleet parity with
 3. [0003 — Kafka choreography consumer of fulfillment-execution, no REST dependency](docs/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution.md)
 4. [0004 — StandardSecondsAtCompletion is frozen at ingestion time, never recomputed](docs/docs/adr/0004-standard-frozen-at-completion-time-not-recomputed.md)
 10. [0010 — Transactional outbox for the analytics topic](docs/docs/adr/0010-transactional-outbox.md)
+11. [0011 — REST identity: fleet-standard static bearer keys with read/read-write scopes](docs/docs/adr/0011-rest-auth-static-bearer-scopes.md)
 
-The full, current list (0001–0010) is in [docs/docs/adr/about.md](docs/docs/adr/about.md).
+The full, current list (0001–0011) is in [docs/docs/adr/about.md](docs/docs/adr/about.md).
 
 ## License
 

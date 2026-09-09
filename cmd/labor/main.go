@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/claudioed/labor-performance/internal/adapters/inbound/auth"
 	inboundhttp "github.com/claudioed/labor-performance/internal/adapters/inbound/http"
 	inboundkafka "github.com/claudioed/labor-performance/internal/adapters/inbound/kafka"
 	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
@@ -101,6 +102,7 @@ func run() error {
 		GetStandard:            &usecases.GetStandard{Standards: standards},
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: performances},
+		Auth:                   buildAuth(logger),
 	}
 
 	httpServer := &http.Server{
@@ -177,6 +179,26 @@ func run() error {
 		logger.Warn("outbox relay did not stop before the shutdown deadline")
 	}
 	return err
+}
+
+// buildAuth wires the fleet-standard REST identity middleware (ADR 0011):
+// static bearer keys from API_READ_KEY / API_READWRITE_KEY (falling back
+// to MCP_READ_KEY / MCP_READWRITE_KEY), and AUTH_MODE=enforce|log|off.
+// The default mode is enforce when at least one key is configured and
+// off — with a loud WARN — when none is, so local runs and handler tests
+// without keys are unaffected. Key material is never logged.
+func buildAuth(logger *slog.Logger) *auth.Middleware {
+	authn := auth.NewStaticKeyAuth(auth.KeysFromEnv(os.Getenv))
+	defaultMode := auth.ModeOff
+	if authn.HasKeys() {
+		defaultMode = auth.ModeEnforce
+	}
+	mode := auth.ParseMode(os.Getenv("AUTH_MODE"), defaultMode)
+	if mode == auth.ModeOff {
+		logger.Warn("REST auth is OFF: no API_READ_KEY/API_READWRITE_KEY configured or AUTH_MODE=off")
+	}
+	logger.Info("REST auth configured", "mode", string(mode), "keys", authn.HasKeys())
+	return &auth.Middleware{Authn: authn, Mode: mode, Logger: logger}
 }
 
 // newLogger builds the process-wide structured logger, wrapped so any

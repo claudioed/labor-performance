@@ -36,6 +36,7 @@ const sidebars: SidebarsConfig = {
         'adr/0008-standard-metrics-convention',
         'adr/0009-mcp-inbound-adapter',
         'adr/0010-transactional-outbox',
+        'adr/0011-rest-auth-static-bearer-scopes',
       ],
     },
   ],

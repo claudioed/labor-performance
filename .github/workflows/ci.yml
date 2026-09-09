@@ -187,7 +187,7 @@ jobs:
         with:
           node-version: "20"
       - name: Install Spectral
-        run: npm install -g @stoplight/spectral-cli
+        run: npm install -g @stoplight/spectral-cli@6.16.3
       - name: Lint OpenAPI spec (OLTP API)
         run: spectral lint apis/openapi.yaml --ruleset .spectral.yaml --fail-severity=warn
       - name: Lint OpenAPI spec (reports API)
@@ -212,7 +212,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
       - name: govulncheck
         run: govulncheck ./...
 

@@ -98,6 +98,23 @@ database:
   existingSecret: ""
   existingSecretKey: "DATABASE_URL"
 
+# Fleet-standard REST identity (ADR 0011 here, warehouse-ops-agent ADR 0005
+# fleet-wide): static bearer keys with read / read-write scopes, no IdP.
+#   mode: enforce | log | off. "log" lets every request through but emits
+#         "auth: would-reject" — the rollout gate. With no key configured the
+#         binaries fall back to "off" (with a WARN) regardless of this value.
+#   readKey / readWriteKey: rendered into the chart's own Secret as
+#         API_READ_KEY / API_READWRITE_KEY. Leave both empty and set
+#         existingSecret to a Secret that already carries those keys (the
+#         MCP Secret's MCP_READ_KEY / MCP_READWRITE_KEY are accepted as a
+#         fallback by the binaries, so one Secret can serve both surfaces).
+# Both the OLTP deployment and the reports deployment get the same refs.
+auth:
+  mode: "enforce"
+  readKey: ""
+  readWriteKey: ""
+  existingSecret: ""
+
 # This service consumes warehouse.fulfillment.events (fulfillment-execution's
 # TaskCompleted). kafka.enabled gates whether KAFKA_BROKERS is set in the
 # container env at all — without it, the consumer goroutine still starts
