@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/claudioed/labor-performance/internal/adapters/inbound/auth"
 	inboundhttp "github.com/claudioed/labor-performance/internal/adapters/inbound/http"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/analyticsstore"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/telemetry"
@@ -80,7 +81,10 @@ func run() error {
 	}
 	defer pool.Close()
 
-	handlers := &inboundhttp.ReportsHandlers{Store: analyticsstore.NewPostgresReport(pool)}
+	handlers := &inboundhttp.ReportsHandlers{
+		Store: analyticsstore.NewPostgresReport(pool),
+		Auth:  buildAuth(logger),
+	}
 	srv := &http.Server{
 		Addr:              httpAddr,
 		Handler:           inboundhttp.NewReportsRouter(handlers, logger),
@@ -107,6 +111,25 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// buildAuth wires the fleet-standard REST identity middleware (ADR 0011)
+// for the reports reader: same keys and AUTH_MODE convention as cmd/labor;
+// the router pins the required scope to read. Default mode is enforce
+// when a key is configured, off (with a WARN) when none is. Key material
+// is never logged.
+func buildAuth(logger *slog.Logger) *auth.Middleware {
+	authn := auth.NewStaticKeyAuth(auth.KeysFromEnv(os.Getenv))
+	defaultMode := auth.ModeOff
+	if authn.HasKeys() {
+		defaultMode = auth.ModeEnforce
+	}
+	mode := auth.ParseMode(os.Getenv("AUTH_MODE"), defaultMode)
+	if mode == auth.ModeOff {
+		logger.Warn("REST auth is OFF: no API_READ_KEY/API_READWRITE_KEY configured or AUTH_MODE=off")
+	}
+	logger.Info("REST auth configured", "mode", string(mode), "keys", authn.HasKeys())
+	return &auth.Middleware{Authn: authn, Mode: mode, Logger: logger}
 }
 
 // newLogger builds the process-wide structured logger, wrapped so any
