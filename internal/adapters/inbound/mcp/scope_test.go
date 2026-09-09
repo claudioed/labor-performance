@@ -6,12 +6,13 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/claudioed/labor-performance/internal/adapters/inbound/auth"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 )
 
 // TestScopeGating_DeniesWithoutReadScope proves that a context carrying no
 // (or insufficient) scope is rejected by the handler guard. Every
-// registered tool is a read tool, so ScopeRead is the minimum the guard
+// registered tool is a read tool, so auth.ScopeRead is the minimum the guard
 // enforces; the transport test always presents a valid key, so this
 // white-box test is what exercises the denial branch.
 func TestScopeGating_DeniesWithoutReadScope(t *testing.T) {
@@ -19,23 +20,23 @@ func TestScopeGating_DeniesWithoutReadScope(t *testing.T) {
 	unauth := context.Background()
 
 	t.Run("empty-scope context denied at the read guard", func(t *testing.T) {
-		if scopeAllows(scopeFromContext(unauth), ScopeRead) {
+		if auth.Allows(scopeFromContext(unauth), auth.ScopeRead) {
 			t.Fatal("empty-scope context must not satisfy ScopeRead")
 		}
 	})
 
 	t.Run("read scope satisfies read", func(t *testing.T) {
-		ctx := context.WithValue(context.Background(), scopeKey{}, ScopeRead)
-		if !scopeAllows(scopeFromContext(ctx), ScopeRead) {
+		ctx := context.WithValue(context.Background(), scopeKey{}, auth.ScopeRead)
+		if !auth.Allows(scopeFromContext(ctx), auth.ScopeRead) {
 			t.Fatal("read scope must satisfy ScopeRead")
 		}
 	})
 
 	t.Run("read scope does not satisfy the future write seam", func(t *testing.T) {
 		// The read-write scope class exists for a future write tool; a
-		// read-only key must not clear ScopeReadWrite.
-		ctx := context.WithValue(context.Background(), scopeKey{}, ScopeRead)
-		if scopeAllows(scopeFromContext(ctx), ScopeReadWrite) {
+		// read-only key must not clear auth.ScopeReadWrite.
+		ctx := context.WithValue(context.Background(), scopeKey{}, auth.ScopeRead)
+		if auth.Allows(scopeFromContext(ctx), auth.ScopeReadWrite) {
 			t.Fatal("read scope must NOT satisfy ScopeReadWrite")
 		}
 	})
@@ -111,7 +112,7 @@ func TestResourceReadMalformedURI(t *testing.T) {
 
 	client := sdk.NewClient(&sdk.Implementation{Name: "t", Version: "0"}, nil)
 	ct, st := sdk.NewInMemoryTransports()
-	ctx := context.WithValue(context.Background(), scopeKey{}, ScopeRead)
+	ctx := context.WithValue(context.Background(), scopeKey{}, auth.ScopeRead)
 	ss, err := server.Connect(ctx, st, nil)
 	if err != nil {
 		t.Fatalf("server connect: %v", err)
