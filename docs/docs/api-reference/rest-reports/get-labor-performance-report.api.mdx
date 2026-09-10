@@ -1,0 +1,73 @@
+---
+id: get-labor-performance-report
+title: "Labor Performance Report, keyed by TaskType and UTC hour"
+description: "Returns the labor performance rollup for a half-open time window [from, to), as raw (taskType, hour) rows, a per-TaskType breakdown suitable for a bar chart, and window totals."
+sidebar_label: "Labor Performance Report, keyed by TaskType and UTC hour"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "get api-method"
+info_path: docs/api-reference/rest-reports/labor-performance-reports-api
+custom_edit_url: null
+hide_send_button: true
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Labor Performance Report, keyed by TaskType and UTC hour"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/reports/performance"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Returns the labor performance rollup for a half-open time window [from, to), as raw (taskType, hour) rows, a per-TaskType breakdown suitable for a bar chart, and window totals.
+Rows are bucketed by the BUSINESS time of the underlying event (a task's completedAt, a standard's effectiveFrom), never by ingestion time, so a replayed or late-projected event lands in the hour the work actually happened.
+Note that `taskType` may legitimately be `UNCLASSIFIED`: fulfillment-execution's TaskCompleted payload does not yet carry a task_type field, so tasks recorded today are labelled explicitly rather than dropped or given an invented type.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./get-labor-performance-report.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-labor-performance-report.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-labor-performance-report.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      
