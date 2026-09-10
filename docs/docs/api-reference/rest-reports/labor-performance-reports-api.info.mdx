@@ -1,0 +1,58 @@
+---
+id: labor-performance-reports-api
+title: "Labor Performance Reports API"
+description: "The READ-ONLY analytical surface of the Labor Performance bounded context's data product (ADR 0007), served by the separate `cmd/labor-reports` binary over a read-only pool against the analytical database — NOT by the OLTP `cmd/labor` binary documented in apis/openapi.yaml."
+sidebar_label: Introduction
+sidebar_position: 0
+hide_title: true
+custom_edit_url: null
+---
+
+import ApiLogo from "@theme/ApiLogo";
+import Heading from "@theme/Heading";
+import SchemaTabs from "@theme/SchemaTabs";
+import TabItem from "@theme/TabItem";
+import Export from "@theme/ApiExplorer/Export";
+
+<span
+  className={"theme-doc-version-badge badge badge--secondary"}
+  children={"Version: 1.0.0"}
+>
+</span>
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Labor Performance Reports API"}
+>
+</Heading>
+
+
+
+The READ-ONLY analytical surface of the Labor Performance bounded context's data product (ADR 0007), served by the separate `cmd/labor-reports` binary over a read-only pool against the analytical database — NOT by the OLTP `cmd/labor` binary documented in apis/openapi.yaml.
+The report is a projection over this service's own domain events (LaborStandardDefined, LaborStandardRevised, TaskPerformanceRecorded), delivered on the `warehouse.labor-performance.analytics` topic and applied by `cmd/labor-projector` — the single writer. It is therefore EVENTUALLY CONSISTENT: use GET /reports/performance/freshness to see how far behind the event stream the read model currently is.
+Every mean in this API is NULLABLE, and null is a real answer that clients must handle distinctly from zero. An hour bucket can hold real, counted tasks and still have no efficiency number — because no engineered standard was active at completion time, or because the completion carried no measurable duration. Reporting 0 in that case would brand an unmeasurable hour as a 0%-efficient one, which this context refuses to do (ADR 0004).
+
+
+<div
+  style={{"display":"flex","flexDirection":"column","marginBottom":"var(--ifm-paragraph-margin-bottom)"}}
+>
+  <h3
+    style={{"marginBottom":"0.25rem"}}
+  >
+    Contact
+  </h3><span>
+    Labor Performance Team: 
+  </span><span>
+    URL: [https://github.com/claudioed/labor-performance](https://github.com/claudioed/labor-performance)
+  </span>
+</div><div
+  style={{"marginBottom":"var(--ifm-paragraph-margin-bottom)"}}
+>
+  <h3
+    style={{"marginBottom":"0.25rem"}}
+  >
+    License
+  </h3>
+</div>
+      
