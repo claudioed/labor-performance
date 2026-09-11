@@ -94,3 +94,10 @@ Name of the Secret holding the analytics DSNs, when the chart creates its own.
 {{- include "labor-performance.fullname" . }}-analytics
 {{- end }}
 {{- end }}
+
+{{/*
+Fully qualified name of the MCP server deployment/service (ADR-0009).
+*/}}
+{{- define "labor-performance.mcpFullname" -}}
+{{- include "labor-performance.fullname" . }}-mcp
+{{- end }}
