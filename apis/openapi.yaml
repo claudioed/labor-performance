@@ -22,6 +22,8 @@ tags:
     description: Engineered labor standards (TaskType -> expected duration)
   - name: performance
     description: Actual-vs-standard performance read models
+  - name: utilization
+    description: Idle-gap / utilization read models (idleness ADR)
   - name: health
     description: Liveness probe
 paths:
@@ -159,6 +161,57 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
+  /task-types/{taskType}/utilization:
+    get:
+      tags: [utilization]
+      operationId: getTaskTypeUtilization
+      summary: Get fleet-wide idle-gap / utilization for a TaskType over a trailing window
+      description: >
+        Measured task time vs. measured idle time (between-task waits)
+        for one TaskType, plus the still-running open-gap contribution
+        for anyone currently idle (computed at read time, never
+        persisted). Always returns 200, including a zero-count result
+        for a TaskType this service has never observed.
+      parameters:
+        - $ref: "#/components/parameters/TaskTypePathParam"
+        - $ref: "#/components/parameters/WindowQueryParam"
+      responses:
+        "200":
+          description: The task-type utilization read model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Utilization"
+        "400":
+          description: Unknown task type
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+  /associates/{associateId}/utilization:
+    get:
+      tags: [utilization]
+      operationId: getAssociateUtilization
+      summary: Get one associate's idle-gap / utilization over a trailing window
+      description: >
+        Measured task time vs. measured idle time for one associate,
+        plus the still-running open-gap contribution when that associate
+        is idle right now. Always returns 200, including a zero-count
+        result for an associate this service has never observed.
+      parameters:
+        - name: associateId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/WindowQueryParam"
+      responses:
+        "200":
+          description: The associate utilization read model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Utilization"
 components:
   parameters:
     TaskTypePathParam:
@@ -167,6 +220,16 @@ components:
       required: true
       schema:
         $ref: "#/components/schemas/TaskType"
+    WindowQueryParam:
+      name: window
+      in: query
+      required: false
+      description: >
+        A Go duration string (e.g. "1h", "30m") for the trailing window
+        to measure over. Defaults to 1 hour when omitted or malformed.
+      schema:
+        type: string
+        example: "1h"
   schemas:
     TaskType:
       type: string
@@ -278,3 +341,53 @@ components:
         instance:
           type: string
       required: [type, title, status, detail]
+    Utilization:
+      type: object
+      description: >
+        Idle-gap / utilization read model for either one TaskType
+        (fleet-wide) or one associate, over a trailing window. taskType
+        and associateId are mutually exclusive -- whichever endpoint
+        served the request populates its own identifying field and omits
+        the other.
+      properties:
+        taskType:
+          $ref: "#/components/schemas/TaskType"
+        associateId:
+          type: string
+        associates:
+          type: integer
+          description: >
+            The distinct associate count contributing to this result.
+            Always 1 for a per-associate result; for a task-type result,
+            the distinct-associate count over the window (0 for a
+            never-observed task type).
+        windowSeconds:
+          type: integer
+          format: int64
+        taskSeconds:
+          type: integer
+          format: int64
+          description: Summed measured task duration over the window.
+        idleSeconds:
+          type: integer
+          format: int64
+          description: >
+            Summed recorded (closed) idle-gap seconds over the window --
+            never includes openGapSeconds.
+        openGapSeconds:
+          type: integer
+          format: int64
+          description: >
+            The still-running idle time for a subject idle right now:
+            now minus their last known activity, clamped to the window.
+            Computed at READ time, never persisted (see the idleness
+            ADR's "Trailing idleness" limitation). Zero when the subject
+            is not currently idle.
+        utilizationPct:
+          type: number
+          format: double
+          nullable: true
+          description: >
+            100 * taskSeconds / (taskSeconds + idleSeconds +
+            openGapSeconds). Null when nothing was observed in the
+            window -- never a fabricated number.

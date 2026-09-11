@@ -147,7 +147,13 @@ func integrationData(e shared.DomainEvent) (eventType, key string, data json.Raw
 			// analytics stream.
 			"efficiency_pct": ev.EfficiencyPct,
 			"actual_seconds": ev.ActualSeconds,
-			"completed_at":   ev.CompletedAt,
+			// A nil IdleSecondsBefore likewise marshals to JSON null
+			// — "not observed", never a fabricated 0. ADDITIVE field:
+			// a Conformist unmarshaling unknown-field-tolerant JSON
+			// (e.g. workforce-management's laborperformancecache) is
+			// unaffected by its presence.
+			"idle_seconds_before": ev.IdleSecondsBefore,
+			"completed_at":        ev.CompletedAt,
 		}), true
 
 	default:

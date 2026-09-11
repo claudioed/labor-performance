@@ -21,7 +21,7 @@ func TestAnalyticsPublisherEncodeProducesOneWireMessagePerContractEvent(t *testi
 	msgs, err := p.Encode(context.Background(),
 		shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9)),
 		unknownEvent{},
-		shared.NewTaskPerformanceRecorded(at(11), "task-1", shared.AssociateId("assoc-1"), shared.Pack, 52, &pct, at(9)),
+		shared.NewTaskPerformanceRecorded(at(11), "task-1", shared.AssociateId("assoc-1"), shared.Pack, 52, &pct, nil, at(9)),
 	)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
