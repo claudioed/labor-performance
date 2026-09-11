@@ -180,3 +180,28 @@ analytics:
       requests:
         cpu: 100m
         memory: 128Mi
+
+# --- MCP server (ADR-0009) ---
+# The Model Context Protocol server (cmd/mcp): a second deployable over the
+# same three read use cases (GetAssociateScorecard, GetTaskTypePerformance,
+# GetStandard) and the same OLTP database as cmd/labor, served over
+# Streamable HTTP at "/" (no separate healthz route — probes use a TCP
+# socket check). This context exposes no write tool over MCP.
+# Disabled by default so existing releases are unaffected; set
+# mcp.enabled=true to deploy it.
+mcp:
+  enabled: false
+  replicaCount: 1
+  httpAddr: ":8090"
+  service:
+    type: ClusterIP
+    port: 8090
+    targetPort: 8090
+  extraEnv: []
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
