@@ -202,7 +202,12 @@ func marshalData(e shared.DomainEvent) (eventType, key string, data json.RawMess
 			// travels over the wire intact rather than degrading to 0.
 			"efficiency_pct": ev.EfficiencyPct,
 			"actual_seconds": ev.ActualSeconds,
-			"completed_at":   ev.CompletedAt,
+			// A nil IdleSecondsBefore likewise marshals to JSON null
+			// — "not observed" (no prior completion, an out-of-order
+			// gap, or an unattributed/robot-station task), never a
+			// fabricated 0.
+			"idle_seconds_before": ev.IdleSecondsBefore,
+			"completed_at":        ev.CompletedAt,
 		}), true
 
 	default:

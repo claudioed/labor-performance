@@ -74,7 +74,7 @@ func TestIntegrationPublisher_PublishesTaskPerformanceRecordedToRealBroker(t *te
 	associateID := fmt.Sprintf("integration-assoc-%d", time.Now().UnixNano())
 	completedAt := time.Now().UTC().Truncate(time.Second)
 	event := shared.NewTaskPerformanceRecorded(
-		time.Now().UTC(), taskID, shared.AssociateId(associateID), shared.Pick, 41, &pct, completedAt)
+		time.Now().UTC(), taskID, shared.AssociateId(associateID), shared.Pick, 41, &pct, nil, completedAt)
 
 	if err := publisher.Publish(testCtx, event); err != nil {
 		t.Fatalf("publish TaskPerformanceRecorded: %v", err)
