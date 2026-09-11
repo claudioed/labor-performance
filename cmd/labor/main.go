@@ -148,7 +148,7 @@ func run() error {
 	if relay != nil {
 		go func() {
 			defer close(relayDone)
-			logger.Info("outbox relay running", "topic", envelope.TopicLaborPerformanceAnalytics)
+			logger.Info("outbox relay running", "topics", []string{envelope.TopicLaborPerformanceAnalytics, envelope.TopicLaborPerformanceEvents})
 			if err := relay.Run(relayCtx); err != nil && !errors.Is(err, context.Canceled) {
 				errCh <- err
 			}
@@ -214,15 +214,18 @@ func serviceVersion() string {
 // The default is the log publisher this service has always used, so
 // nothing about the existing OLTP behaviour changes unless it is opted
 // into. Setting EVENT_PUBLISHER=kafka additionally fans every domain
-// event onto warehouse.labor-performance.analytics, which is what feeds
-// the analytical data product's projector (ADR-0007). The log publisher
-// stays FIRST in the fan-out so a broker outage still leaves the event
-// visible in the logs before the publish error surfaces.
+// event onto TWO Kafka topics: warehouse.labor-performance.analytics,
+// which feeds the analytical data product's projector (ADR-0007), and
+// warehouse.labor-performance.events, this service's integration topic
+// (ADR-0013) carrying TaskPerformanceRecorded for other bounded contexts
+// to consume. The log publisher stays FIRST in the fan-out so a broker
+// outage still leaves the event visible in the logs before the publish
+// error surfaces.
 //
 // With BOTH Postgres and kafka configured the use cases publish into the
-// transactional outbox (ADR 0010) and the relay forwards rows to Kafka;
-// the store and the topic can no longer diverge. With kafka but no
-// Postgres (in-memory dev runs) events go straight to the broker as
+// transactional outbox (ADR 0010) and the relay forwards rows to both
+// topics; the store and the topics can no longer diverge. With kafka but
+// no Postgres (in-memory dev runs) events go straight to the broker as
 // before — there is no transaction to bind them to.
 //
 // None of this touches the domain or application layers: they still see
@@ -236,29 +239,33 @@ func buildEventPublisher(p *persistence, logger *slog.Logger) (ports.EventPublis
 
 	brokers := strings.Split(getenv("KAFKA_BROKERS", "localhost:9092"), ",")
 	analytics := outboundkafka.NewAnalyticsPublisher(brokers, uuid.NewString)
-	closeAnalytics := func() {
+	integration := outboundkafka.NewIntegrationPublisher(brokers, uuid.NewString)
+	closePublishers := func() {
 		if err := analytics.Close(); err != nil {
 			logger.Error("error closing analytics kafka publisher", "error", err)
+		}
+		if err := integration.Close(); err != nil {
+			logger.Error("error closing integration kafka publisher", "error", err)
 		}
 	}
 
 	if p.pool == nil {
 		logger.Info("event publisher configured", "publisher", "kafka", "mode", "direct",
-			"topic", envelope.TopicLaborPerformanceAnalytics, "brokers", brokers)
-		return outboundkafka.NewFanOutPublisher(logPublisher, analytics), nil, closeAnalytics
+			"topics", []string{envelope.TopicLaborPerformanceAnalytics, envelope.TopicLaborPerformanceEvents}, "brokers", brokers)
+		return outboundkafka.NewFanOutPublisher(logPublisher, analytics, integration), nil, closePublishers
 	}
 
 	sink := outboundkafka.NewRelaySink(brokers)
 	relay := postgres.NewOutboxRelay(p.pool, sink, logger,
 		postgres.WithInterval(durationEnv("OUTBOX_RELAY_INTERVAL", time.Second)))
 	logger.Info("event publisher configured", "publisher", "kafka", "mode", "outbox",
-		"topic", envelope.TopicLaborPerformanceAnalytics, "brokers", brokers)
-	outbox := postgres.NewOutboxPublisher(p.pool, analytics)
+		"topics", []string{envelope.TopicLaborPerformanceAnalytics, envelope.TopicLaborPerformanceEvents}, "brokers", brokers)
+	outbox := postgres.NewOutboxPublisher(p.pool, analytics, integration)
 	return outboundkafka.NewFanOutPublisher(logPublisher, outbox), relay, func() {
 		if err := sink.Close(); err != nil {
 			logger.Error("error closing outbox relay sink", "error", err)
 		}
-		closeAnalytics()
+		closePublishers()
 	}
 }
 
