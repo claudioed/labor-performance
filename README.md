@@ -382,17 +382,12 @@ cosign keyless signing + SPDX SBOM attestation), and **`release`**
 
 ## Known gaps
 
-- **`fulfillment-execution`'s `TaskCompleted` payload does not carry a
-  `task_type` field today**, verified against its actual
-  `feature/labor-performance-hooks` publisher this session. This service
-  resolves `TaskType` as `""` (unclassified) for every consumed event as a
-  result. A `""`-typed row is still recorded and counted, but never
-  resolves a `LaborStandard` and never appears under
-  `GetTaskTypePerformance` (which requires PICK/PACK/SLAM). Adding
-  `task_type` to that payload on the fulfillment-execution side is a
-  natural, additive fast-follow that would let this service resolve it
-  directly — see
-  [ADR 0003](docs/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution.md).
+None currently open. The previous entry here — `fulfillment-execution`'s
+`TaskCompleted` payload not carrying a `task_type` field, leaving every
+consumed event bucketed as `""` (unclassified) — was closed by
+fulfillment-execution ADR-0023 (`task_type` added to the wire payload)
+together with this service's own consumer update (`ParseTaskTypeLenient`
+now receives the real value instead of a hardcoded `""`).
 
 ## Deferred (v1)
 
