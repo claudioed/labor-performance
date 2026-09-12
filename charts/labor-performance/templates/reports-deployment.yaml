@@ -46,9 +46,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "labor-performance.analyticsSecretName" . }}
                   key: ANALYTICS_READER_DATABASE_URL
-            # Same bearer keys as the OLTP deployment (ADR 0011); the reports
-            # router pins the required scope to read.
-            {{- include "labor-performance.authEnv" . | nindent 12 }}
             {{- if .Values.otel.enabled }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}

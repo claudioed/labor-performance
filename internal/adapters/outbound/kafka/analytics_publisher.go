@@ -1,13 +1,16 @@
-// Package kafka holds this service's outbound Kafka adapters. Today that
-// is the ANALYTICS publisher only: it fans this service's own past-tense
-// domain events onto warehouse.labor-performance.analytics, feeding the
-// data product's projector (ADR-0007).
+// Package kafka holds this service's outbound Kafka adapters: the
+// ANALYTICS publisher, which fans this service's own past-tense domain
+// events onto warehouse.labor-performance.analytics, feeding the data
+// product's own projector (ADR-0007); and the INTEGRATION publisher
+// (ADR-0013), which publishes TaskPerformanceRecorded onto
+// warehouse.labor-performance.events, this service's first Published
+// Language for other bounded contexts to consume.
 //
 // It is strictly ADDITIVE. The OLTP write path is untouched: the domain
 // and application layers still publish through the same
 // ports.EventPublisher they always have, the log publisher still exists
 // and is still the default, and no existing consumer of any other topic
-// is affected — because this service publishes to no other topic.
+// is affected.
 //
 // Since ADR 0010 (transactional outbox) the publisher is split in two
 // halves: Encode turns domain events into wire-ready messages and Publish
@@ -199,7 +202,12 @@ func marshalData(e shared.DomainEvent) (eventType, key string, data json.RawMess
 			// travels over the wire intact rather than degrading to 0.
 			"efficiency_pct": ev.EfficiencyPct,
 			"actual_seconds": ev.ActualSeconds,
-			"completed_at":   ev.CompletedAt,
+			// A nil IdleSecondsBefore likewise marshals to JSON null
+			// — "not observed" (no prior completion, an out-of-order
+			// gap, or an unattributed/robot-station task), never a
+			// fabricated 0.
+			"idle_seconds_before": ev.IdleSecondsBefore,
+			"completed_at":        ev.CompletedAt,
 		}), true
 
 	default:

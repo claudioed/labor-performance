@@ -22,16 +22,15 @@ tags:
     description: Engineered labor standards (TaskType -> expected duration)
   - name: performance
     description: Actual-vs-standard performance read models
+  - name: utilization
+    description: Idle-gap / utilization read models (idleness ADR)
   - name: health
     description: Liveness probe
-security:
-  - bearerAuth: []
 paths:
   /healthz:
     get:
       tags: [health]
       operationId: getHealthz
-      security: []
       summary: Liveness probe
       description: Reports whether the service process is up and able to serve requests.
       responses:
@@ -61,10 +60,6 @@ paths:
             schema:
               $ref: "#/components/schemas/DefineStandardRequest"
       responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
         "201":
           description: Standard defined (or the revision recorded)
           content:
@@ -95,8 +90,6 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TaskTypePathParam"
       responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "200":
           description: The currently-active standard
           content:
@@ -132,8 +125,6 @@ paths:
           schema:
             type: string
       responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "200":
           description: The associate's scorecard
           content:
@@ -158,8 +149,6 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TaskTypePathParam"
       responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "200":
           description: The fleet-wide task-type performance read model
           content:
@@ -172,36 +161,58 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
+  /task-types/{taskType}/utilization:
+    get:
+      tags: [utilization]
+      operationId: getTaskTypeUtilization
+      summary: Get fleet-wide idle-gap / utilization for a TaskType over a trailing window
       description: >
-        Fleet-standard static bearer key (ADR 0011; warehouse-ops-agent ADR
-        0005 fleet-wide). A key granting the `read` scope satisfies GET /
-        HEAD / OPTIONS; every other method requires a key granting
-        `read-write`. A missing or invalid credential is a 401
-        application/problem+json with `WWW-Authenticate`; an under-scoped
-        one is a 403. Not required by /healthz.
-  responses:
-    Unauthorized:
-      description: Missing or invalid bearer credential
-      headers:
-        WWW-Authenticate:
+        Measured task time vs. measured idle time (between-task waits)
+        for one TaskType, plus the still-running open-gap contribution
+        for anyone currently idle (computed at read time, never
+        persisted). Always returns 200, including a zero-count result
+        for a TaskType this service has never observed.
+      parameters:
+        - $ref: "#/components/parameters/TaskTypePathParam"
+        - $ref: "#/components/parameters/WindowQueryParam"
+      responses:
+        "200":
+          description: The task-type utilization read model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Utilization"
+        "400":
+          description: Unknown task type
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+  /associates/{associateId}/utilization:
+    get:
+      tags: [utilization]
+      operationId: getAssociateUtilization
+      summary: Get one associate's idle-gap / utilization over a trailing window
+      description: >
+        Measured task time vs. measured idle time for one associate,
+        plus the still-running open-gap contribution when that associate
+        is idle right now. Always returns 200, including a zero-count
+        result for an associate this service has never observed.
+      parameters:
+        - name: associateId
+          in: path
+          required: true
           schema:
             type: string
-            example: Bearer realm="warehouse-systems"
-      content:
-        application/problem+json:
-          schema:
-            $ref: "#/components/schemas/ProblemDetails"
-    Forbidden:
-      description: The credential does not grant the scope this operation requires
-      content:
-        application/problem+json:
-          schema:
-            $ref: "#/components/schemas/ProblemDetails"
+        - $ref: "#/components/parameters/WindowQueryParam"
+      responses:
+        "200":
+          description: The associate utilization read model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Utilization"
+components:
   parameters:
     TaskTypePathParam:
       name: taskType
@@ -209,6 +220,16 @@ components:
       required: true
       schema:
         $ref: "#/components/schemas/TaskType"
+    WindowQueryParam:
+      name: window
+      in: query
+      required: false
+      description: >
+        A Go duration string (e.g. "1h", "30m") for the trailing window
+        to measure over. Defaults to 1 hour when omitted or malformed.
+      schema:
+        type: string
+        example: "1h"
   schemas:
     TaskType:
       type: string
@@ -320,3 +341,53 @@ components:
         instance:
           type: string
       required: [type, title, status, detail]
+    Utilization:
+      type: object
+      description: >
+        Idle-gap / utilization read model for either one TaskType
+        (fleet-wide) or one associate, over a trailing window. taskType
+        and associateId are mutually exclusive -- whichever endpoint
+        served the request populates its own identifying field and omits
+        the other.
+      properties:
+        taskType:
+          $ref: "#/components/schemas/TaskType"
+        associateId:
+          type: string
+        associates:
+          type: integer
+          description: >
+            The distinct associate count contributing to this result.
+            Always 1 for a per-associate result; for a task-type result,
+            the distinct-associate count over the window (0 for a
+            never-observed task type).
+        windowSeconds:
+          type: integer
+          format: int64
+        taskSeconds:
+          type: integer
+          format: int64
+          description: Summed measured task duration over the window.
+        idleSeconds:
+          type: integer
+          format: int64
+          description: >
+            Summed recorded (closed) idle-gap seconds over the window --
+            never includes openGapSeconds.
+        openGapSeconds:
+          type: integer
+          format: int64
+          description: >
+            The still-running idle time for a subject idle right now:
+            now minus their last known activity, clamped to the window.
+            Computed at READ time, never persisted (see the idleness
+            ADR's "Trailing idleness" limitation). Zero when the subject
+            is not currently idle.
+        utilizationPct:
+          type: number
+          format: double
+          nullable: true
+          description: >
+            100 * taskSeconds / (taskSeconds + idleSeconds +
+            openGapSeconds). Null when nothing was observed in the
+            window -- never a fabricated number.

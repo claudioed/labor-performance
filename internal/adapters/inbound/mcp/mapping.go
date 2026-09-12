@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"github.com/claudioed/labor-performance/internal/application/ports"
+	"github.com/claudioed/labor-performance/internal/application/usecases"
 	"github.com/claudioed/labor-performance/internal/domain/standard"
 )
 
@@ -72,6 +73,31 @@ func toTaskTypePerformanceDTO(p ports.TaskTypePerformance) taskTypePerformanceDT
 		TaskCount:         p.TaskCount,
 		MeanEfficiencyPct: p.MeanEfficiencyPct,
 		MeanActualSeconds: p.MeanActualSeconds,
+	}
+}
+
+// utilizationDTO is the get_task_type_utilization tool's output.
+type utilizationDTO struct {
+	TaskType       string `json:"taskType"`
+	Associates     int    `json:"associates"`
+	WindowSeconds  int64  `json:"windowSeconds"`
+	TaskSeconds    int64  `json:"taskSeconds"`
+	IdleSeconds    int64  `json:"idleSeconds"`
+	OpenGapSeconds int64  `json:"openGapSeconds"`
+	// UtilizationPct is nil when there was nothing to compute a share
+	// of over the window -- never a fabricated number.
+	UtilizationPct *float64 `json:"utilizationPct"`
+}
+
+func toUtilizationDTO(r usecases.UtilizationResult) utilizationDTO {
+	return utilizationDTO{
+		TaskType:       string(r.TaskType),
+		Associates:     r.Associates,
+		WindowSeconds:  r.WindowSeconds,
+		TaskSeconds:    r.TaskSeconds,
+		IdleSeconds:    r.IdleSeconds,
+		OpenGapSeconds: r.OpenGapSeconds,
+		UtilizationPct: r.UtilizationPct,
 	}
 }
 
