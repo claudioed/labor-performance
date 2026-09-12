@@ -11,10 +11,6 @@
 // This server therefore wires only the three read use cases
 // (GetAssociateScorecard, GetTaskTypePerformance, GetStandard) and exposes
 // only read tools.
-//
-// Auth is a static bearer key (no IdP): set MCP_READ_KEY (and, for the
-// future write seam, MCP_READWRITE_KEY) from a Kubernetes Secret. A
-// request must present a valid key; the scope it grants gates the tools.
 package main
 
 import (
@@ -86,11 +82,10 @@ func run() error {
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: adapters.performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: adapters.performances},
 		GetStandard:            &usecases.GetStandard{Standards: adapters.standards},
+		GetUtilization:         &usecases.GetUtilization{Performances: adapters.performances, IdlePeriods: adapters.idlePeriods, Clock: memory.SystemClock{}},
 	}
 	server := inboundmcp.NewServer(deps)
-
-	auth := inboundmcp.NewStaticKeyAuth(authKeys(logger))
-	handler := inboundmcp.Handler(server, auth)
+	handler := inboundmcp.Handler(server)
 
 	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 
@@ -116,6 +111,7 @@ func run() error {
 type adapterSet struct {
 	standards    ports.StandardRepo
 	performances ports.PerformanceRepo
+	idlePeriods  ports.IdlePeriodRepo
 }
 
 // buildAdapters wires the Postgres repos when DATABASE_URL is set, or falls
@@ -130,6 +126,7 @@ func buildAdapters(ctx context.Context, databaseURL, migrationsPath string, logg
 		return adapterSet{
 			standards:    memory.NewStandardRepo(),
 			performances: memory.NewPerformanceRepo(),
+			idlePeriods:  memory.NewIdlePeriodRepo(),
 		}, noop, nil
 	}
 
@@ -145,27 +142,8 @@ func buildAdapters(ctx context.Context, databaseURL, migrationsPath string, logg
 	return adapterSet{
 		standards:    postgres.NewStandardRepo(pool),
 		performances: postgres.NewPerformanceRepo(pool),
+		idlePeriods:  postgres.NewIdlePeriodRepo(pool),
 	}, pool.Close, nil
-}
-
-// authKeys reads the bearer keys from the environment. MCP_READ_KEY grants
-// read scope; MCP_READWRITE_KEY grants read-write (kept for the future
-// write seam even though no write tool is registered yet). If neither is
-// set the server still starts but rejects every request (fail closed) --
-// a missing key must never mean "open to everyone". The keys themselves
-// are never logged.
-func authKeys(logger *slog.Logger) map[string]inboundmcp.Scope {
-	keys := make(map[string]inboundmcp.Scope)
-	if k := os.Getenv("MCP_READ_KEY"); k != "" {
-		keys[k] = inboundmcp.ScopeRead
-	}
-	if k := os.Getenv("MCP_READWRITE_KEY"); k != "" {
-		keys[k] = inboundmcp.ScopeReadWrite
-	}
-	if len(keys) == 0 {
-		logger.Warn("no MCP_READ_KEY or MCP_READWRITE_KEY set; server will reject all requests")
-	}
-	return keys
 }
 
 // newJSONHandler mirrors cmd/labor/main.go's newLogger level parsing, kept

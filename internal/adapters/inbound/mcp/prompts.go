@@ -26,7 +26,7 @@ Interpretation:
 Done means: you have named the specific numbers (efficiency percent, trend, coaching flag) that answer the question, each justified from tool output, with any coaching-flag finding explicitly framed as a signal for human follow-up rather than a conclusion.`
 
 // registerPrompts adds the workflow prompts (operational SOPs).
-func (d Deps) registerPrompts(server *mcp.Server, _ func(context.Context) Scope) {
+func (d Deps) registerPrompts(server *mcp.Server) {
 	server.AddPrompt(&mcp.Prompt{
 		Name:        "review_associate_performance",
 		Description: "Standard operating procedure for reviewing an associate's labor performance (scorecard, trend, coaching flag) against the active standard and fleet-wide task-type performance, using the read tools.",

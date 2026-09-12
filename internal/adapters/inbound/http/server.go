@@ -30,6 +30,7 @@ type Server struct {
 	GetStandard            *usecases.GetStandard
 	GetAssociateScorecard  *usecases.GetAssociateScorecard
 	GetTaskTypePerformance *usecases.GetTaskTypePerformance
+	GetUtilization         *usecases.GetUtilization
 }
 
 // NewRouter builds the chi router for every endpoint in CLAUDE.md's REST
@@ -60,11 +61,16 @@ func NewRouter(s *Server, logger *slog.Logger, serviceName string) http.Handler 
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware())
 
+	// /healthz stays outside any route group; it never needed a
+	// credential and still doesn't now that REST auth is gone.
 	r.Get("/healthz", s.handleHealthz)
+
 	r.Post("/standards", s.handleDefineStandard)
 	r.Get("/standards/{taskType}", s.handleGetStandard)
 	r.Get("/associates/{associateId}/scorecard", s.handleGetAssociateScorecard)
 	r.Get("/task-types/{taskType}/performance", s.handleGetTaskTypePerformance)
+	r.Get("/task-types/{taskType}/utilization", s.handleGetTaskTypeUtilization)
+	r.Get("/associates/{associateId}/utilization", s.handleGetAssociateUtilization)
 
 	return r
 }
@@ -141,6 +147,64 @@ func (s *Server) handleGetTaskTypePerformance(w http.ResponseWriter, r *http.Req
 		MeanEfficiencyPct: tp.MeanEfficiencyPct,
 		MeanActualSeconds: tp.MeanActualSeconds,
 	})
+}
+
+func (s *Server) handleGetTaskTypeUtilization(w http.ResponseWriter, r *http.Request) {
+	taskType, err := shared.NewTaskType(chi.URLParam(r, "taskType"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
+	result, err := s.GetUtilization.ForTaskType(r.Context(), taskType, windowParam(r))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toUtilizationResponse(result))
+}
+
+func (s *Server) handleGetAssociateUtilization(w http.ResponseWriter, r *http.Request) {
+	associateId := shared.AssociateId(chi.URLParam(r, "associateId"))
+
+	result, err := s.GetUtilization.ForAssociate(r.Context(), associateId, windowParam(r))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toUtilizationResponse(result))
+}
+
+// windowParam parses the "window" query param as a Go duration string
+// (e.g. "1h", "30m"). An absent or malformed value resolves to zero,
+// which GetUtilization's callers treat as "apply the default" — a typo
+// here must degrade gracefully, not 400, mirroring every other tuning
+// knob in this fleet.
+func windowParam(r *http.Request) time.Duration {
+	raw := r.URL.Query().Get("window")
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0
+	}
+	return d
+}
+
+func toUtilizationResponse(result usecases.UtilizationResult) utilizationResponse {
+	return utilizationResponse{
+		TaskType:       string(result.TaskType),
+		AssociateId:    string(result.AssociateId),
+		Associates:     result.Associates,
+		WindowSeconds:  result.WindowSeconds,
+		TaskSeconds:    result.TaskSeconds,
+		IdleSeconds:    result.IdleSeconds,
+		OpenGapSeconds: result.OpenGapSeconds,
+		UtilizationPct: result.UtilizationPct,
+	}
 }
 
 const timeFormat = time.RFC3339

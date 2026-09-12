@@ -68,6 +68,10 @@ Typos, broken links and formatting are of course fair game.
 | [0008](./0008-standard-metrics-convention.md) | Standard metrics convention across the fleet | Accepted |
 | [0009](./0009-mcp-inbound-adapter.md) | Model Context Protocol as an inbound adapter, not a new service | Accepted |
 | [0010](./0010-transactional-outbox.md) | Transactional outbox for the analytics topic | Accepted |
+| [0011](./0011-rest-auth-static-bearer-scopes.md) | REST identity — fleet-standard static bearer keys with read/read-write scopes | Superseded by 0012 |
+| [0012](./0012-remove-rest-auth-layer.md) | Remove the REST/MCP identity layer | Accepted |
+| [0013](./0013-labor-performance-integration-events.md) | Labor performance publishes an integration event | Accepted |
+| [0014](./0014-labor-utilization-idleness.md) | Measuring idleness and utilization | Accepted |
 
 Each of these reconstructs a decision that is actually visible in this
 repository's history, `CLAUDE.md` or code — none is a generic placeholder.
