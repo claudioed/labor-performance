@@ -1,11 +1,13 @@
 // Package kafka is the inbound Kafka adapter: it consumes
 // warehouse.fulfillment.events (the shared, fan-out topic
 // wes-work-planning already consumes) and feeds TaskCompleted into the
-// existing RecordTaskPerformance use case. Every other event type on that
-// topic is silently skipped — mirroring wes-work-planning's own consumer's
-// skip-unrecognized-event-type behavior — since this is a shared topic by
-// convention even though fulfillment-execution publishes no other event
-// type to it today.
+// existing RecordTaskPerformance use case, including the task's own type
+// (as of fulfillment-execution's ADR-0023) so per-task-type utilization
+// buckets correctly instead of collapsing into "unclassified". Every
+// other event type on that topic is silently skipped — mirroring
+// wes-work-planning's own consumer's skip-unrecognized-event-type
+// behavior — since this is a shared topic by convention even though
+// fulfillment-execution publishes no other event type to it today.
 package kafka
 
 import (
@@ -27,24 +29,29 @@ import (
 )
 
 // taskCompletedData is fulfillment-execution's TaskCompleted payload, as
-// verified against feature/labor-performance-hooks's actual publisher
+// verified against fulfillment-execution's actual publisher
 // (internal/adapters/outbound/kafka/publisher.go's TaskCompletedData
-// struct) this session. AssociateId and DurationSeconds are marked
+// struct). AssociateId, DurationSeconds, and TaskType are marked
 // `omitempty` on that struct's OWN JSON tags, so an older
-// fulfillment-execution payload that predates that enrichment simply
-// omits them from the wire — this struct's zero values ("" / 0) already
-// degrade gracefully to exactly the "unmeasurable"/"no occupant" cases
-// CLAUDE.md's aggregate invariants require, so no special-casing is needed
-// here beyond ordinary Go zero-value JSON unmarshaling. task_type is
-// deliberately NOT part of that struct today (a real, documented wire gap
-// — see shared.ParseTaskTypeLenient's doc comment), so it is likewise
-// absent here and always resolves to "" (unclassified).
+// fulfillment-execution payload that predates one of those enrichments
+// simply omits it from the wire — this struct's zero values ("" / 0)
+// already degrade gracefully to exactly the "unmeasurable"/"no
+// occupant"/"unclassified" cases CLAUDE.md's aggregate invariants
+// require, so no special-casing is needed here beyond ordinary Go
+// zero-value JSON unmarshaling. TaskType went from a real, documented
+// wire gap (see shared.ParseTaskTypeLenient's doc comment, and
+// fulfillment-execution's ADR-0023) to actually present on the wire as
+// of that ADR; ParseTaskTypeLenient itself is unchanged and still
+// degrades an unrecognized/absent value to "" (unclassified) exactly as
+// before — this consumer now simply has something real to hand it most
+// of the time instead of a hardcoded "".
 type taskCompletedData struct {
 	TaskId          string `json:"task_id"`
 	StationId       string `json:"station_id"`
 	WorkUnitId      string `json:"work_unit_id"`
 	AssociateId     string `json:"associate_id"`
 	DurationSeconds int64  `json:"duration_seconds"`
+	TaskType        string `json:"task_type"`
 }
 
 // Consumer consumes warehouse.fulfillment.events, feeding TaskCompleted
@@ -155,15 +162,20 @@ func (c *Consumer) handleFulfillmentEvent(ctx context.Context, env envelope.Enve
 		return err
 	}
 
-	// task_type is not yet on the wire (see taskCompletedData's doc
-	// comment) — ParseTaskTypeLenient("") always resolves to ""
-	// (unclassified), the same degrade-gracefully path an unrecognized
-	// value would take once fulfillment-execution does add the field.
+	// TaskType now arrives on the wire as of fulfillment-execution's
+	// ADR-0023 (this service's own gap was tracked in ADR-0014, since
+	// closed). ParseTaskTypeLenient handles every case identically to
+	// before: a recognized PICK/PACK/SLAM passes through, and an
+	// unrecognized value (e.g. REBIN, which this service does not model
+	// as an engineered-labor-standard task type) or an absent field
+	// (an older fulfillment-execution payload, or the lookup-miss
+	// degrade case that ADR documents) both still resolve to ""
+	// (unclassified) — never a reason to reject a real completion.
 	_, err := c.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
 		KafkaEventId:  env.EventId,
 		TaskId:        data.TaskId,
 		AssociateId:   shared.AssociateId(data.AssociateId),
-		TaskType:      shared.ParseTaskTypeLenient(""),
+		TaskType:      shared.ParseTaskTypeLenient(data.TaskType),
 		ActualSeconds: data.DurationSeconds,
 		CompletedAt:   env.OccurredAt,
 	})

@@ -23,6 +23,7 @@ type testEnv struct {
 	handler      http.Handler
 	standards    *memory.StandardRepo
 	performances *memory.PerformanceRepo
+	idlePeriods  *memory.IdlePeriodRepo
 }
 
 func newTestEnv(t *testing.T, now time.Time) *testEnv {
@@ -31,6 +32,7 @@ func newTestEnv(t *testing.T, now time.Time) *testEnv {
 	standards := memory.NewStandardRepo()
 	performances := memory.NewPerformanceRepo()
 	processed := memory.NewProcessedEventRepo()
+	idlePeriods := memory.NewIdlePeriodRepo()
 	publisher := events.NewLogPublisher(nil)
 	clock := memory.FixedClock{At: now}
 
@@ -39,6 +41,7 @@ func newTestEnv(t *testing.T, now time.Time) *testEnv {
 		GetStandard:            &usecases.GetStandard{Standards: standards},
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: performances},
+		GetUtilization:         &usecases.GetUtilization{Performances: performances, IdlePeriods: idlePeriods, Clock: clock},
 	}
 	_ = processed // seeded per-record inside recordViaBackdoor; kept here only for symmetry with other adapter fixtures
 
@@ -48,6 +51,7 @@ func newTestEnv(t *testing.T, now time.Time) *testEnv {
 		handler:      inboundhttp.NewRouter(server, logger, ""),
 		standards:    standards,
 		performances: performances,
+		idlePeriods:  idlePeriods,
 	}
 }
 
@@ -62,6 +66,7 @@ func (e *testEnv) recordViaBackdoor(t *testing.T, req usecases.RecordTaskPerform
 		Processed:    memory.NewProcessedEventRepo(),
 		Events:       events.NewLogPublisher(nil),
 		Clock:        memory.FixedClock{At: req.CompletedAt},
+		IdlePeriods:  e.idlePeriods,
 	}
 	if _, err := uc.Execute(context.Background(), req); err != nil {
 		t.Fatalf("recordViaBackdoor: %v", err)
@@ -383,4 +388,116 @@ func TestUnmappedErrorBecomesAProblem500(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 for an unmatched route", rec.Code)
 	}
+}
+
+type utilizationBody struct {
+	TaskType       string   `json:"taskType"`
+	AssociateId    string   `json:"associateId"`
+	Associates     int      `json:"associates"`
+	WindowSeconds  int64    `json:"windowSeconds"`
+	TaskSeconds    int64    `json:"taskSeconds"`
+	IdleSeconds    int64    `json:"idleSeconds"`
+	OpenGapSeconds int64    `json:"openGapSeconds"`
+	UtilizationPct *float64 `json:"utilizationPct"`
+}
+
+func TestGetTaskTypeUtilization(t *testing.T) {
+	t.Run("success: computed from real recorded rows", func(t *testing.T) {
+		e := newTestEnv(t, now)
+		e.recordViaBackdoor(t, usecases.RecordTaskPerformanceRequest{
+			KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: "PICK",
+			ActualSeconds: 30, CompletedAt: now.Add(30 * time.Second),
+		})
+		e.recordViaBackdoor(t, usecases.RecordTaskPerformanceRequest{
+			KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: "PICK",
+			ActualSeconds: 30, CompletedAt: now.Add(30 * time.Second).Add(70 * time.Second).Add(30 * time.Second),
+		})
+
+		rec := e.do(t, http.MethodGet, "/task-types/PICK/utilization?window=2h", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+		}
+		var body utilizationBody
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.TaskSeconds != 60 || body.IdleSeconds != 70 {
+			t.Fatalf("body = %+v", body)
+		}
+		if body.UtilizationPct == nil {
+			t.Fatal("UtilizationPct must be non-nil")
+		}
+	})
+
+	t.Run("success: never-observed task type returns zero, not an error", func(t *testing.T) {
+		e := newTestEnv(t, now)
+		rec := e.do(t, http.MethodGet, "/task-types/SLAM/utilization", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+		}
+		var body utilizationBody
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.TaskSeconds != 0 || body.IdleSeconds != 0 {
+			t.Fatalf("body = %+v", body)
+		}
+		if body.UtilizationPct != nil {
+			t.Fatalf("UtilizationPct = %v, want nil", *body.UtilizationPct)
+		}
+		if body.WindowSeconds != int64((time.Hour).Seconds()) {
+			t.Fatalf("WindowSeconds = %d, want the 1h default (no window param)", body.WindowSeconds)
+		}
+	})
+
+	t.Run("error: unknown task type in path", func(t *testing.T) {
+		e := newTestEnv(t, now)
+		rec := e.do(t, http.MethodGet, "/task-types/WALK/utilization", "")
+		p := assertProblem(t, rec, http.StatusBadRequest)
+		if !strings.HasSuffix(p.Type, "unknown-task-type") {
+			t.Fatalf("problem.type = %q", p.Type)
+		}
+	})
+}
+
+func TestGetAssociateUtilization(t *testing.T) {
+	t.Run("success: open gap for an associate idle right now", func(t *testing.T) {
+		e := newTestEnv(t, now)
+		e.recordViaBackdoor(t, usecases.RecordTaskPerformanceRequest{
+			KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: "PICK",
+			ActualSeconds: 40, CompletedAt: now,
+		})
+
+		rec := e.do(t, http.MethodGet, "/associates/assoc-1/utilization?window=1h", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+		}
+		var body utilizationBody
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.AssociateId != "assoc-1" {
+			t.Fatalf("AssociateId = %q, want assoc-1", body.AssociateId)
+		}
+		// The fixed clock is pinned to `now`, the same instant as the
+		// completion, so the open gap must be exactly zero here.
+		if body.OpenGapSeconds != 0 {
+			t.Fatalf("OpenGapSeconds = %d, want 0 (clock is pinned to the completion instant)", body.OpenGapSeconds)
+		}
+	})
+
+	t.Run("success: unknown associate returns zero, not an error", func(t *testing.T) {
+		e := newTestEnv(t, now)
+		rec := e.do(t, http.MethodGet, "/associates/assoc-unknown/utilization", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+		}
+		var body utilizationBody
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.Associates != 0 {
+			t.Fatalf("Associates = %d, want 0", body.Associates)
+		}
+	})
 }
