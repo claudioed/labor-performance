@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/claudioed/labor-performance/internal/application/ports"
+	"github.com/claudioed/labor-performance/internal/domain/idleness"
 	"github.com/claudioed/labor-performance/internal/domain/performance"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 	"github.com/claudioed/labor-performance/internal/domain/standard"
@@ -119,4 +120,19 @@ func (f *fakeStandardMetrics) StandardDefinitionAccepted(ctx context.Context) {
 
 func (f *fakeStandardMetrics) StandardDefinitionRejected(ctx context.Context) {
 	f.rejected++
+}
+
+// failingIdlePeriodRepo wraps a real ports.IdlePeriodRepo and can be told
+// to fail Save, to exercise RecordTaskPerformance's idle-gap-save error
+// path.
+type failingIdlePeriodRepo struct {
+	ports.IdlePeriodRepo
+	failSave bool
+}
+
+func (f *failingIdlePeriodRepo) Save(ctx context.Context, p *idleness.IdlePeriod) error {
+	if f.failSave {
+		return errUnmapped
+	}
+	return f.IdlePeriodRepo.Save(ctx, p)
 }

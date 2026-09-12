@@ -57,6 +57,22 @@ type taskTypePerformanceResponse struct {
 	MeanActualSeconds *float64 `json:"meanActualSeconds"`
 }
 
+// utilizationResponse is the response body for both
+// GET /task-types/{taskType}/utilization and
+// GET /associates/{associateId}/utilization. taskType/associateId are
+// mutually exclusive — whichever endpoint served the request populates
+// its own identifying field and omits the other.
+type utilizationResponse struct {
+	TaskType       string   `json:"taskType,omitempty"`
+	AssociateId    string   `json:"associateId,omitempty"`
+	Associates     int      `json:"associates"`
+	WindowSeconds  int64    `json:"windowSeconds"`
+	TaskSeconds    int64    `json:"taskSeconds"`
+	IdleSeconds    int64    `json:"idleSeconds"`
+	OpenGapSeconds int64    `json:"openGapSeconds"`
+	UtilizationPct *float64 `json:"utilizationPct"`
+}
+
 // problemDetails is the RFC 7807 (Problem Details for HTTP APIs) response
 // body used for every error response in this service — the same shape the
 // other six services in this fleet emit.

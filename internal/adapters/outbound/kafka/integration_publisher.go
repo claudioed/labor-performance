@@ -1,0 +1,199 @@
+package kafka
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	kafkago "github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel/codes"
+
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/otelkafka"
+	"github.com/claudioed/labor-performance/internal/application/ports"
+	"github.com/claudioed/labor-performance/internal/domain/shared"
+)
+
+// IntegrationPublisher publishes this service's TaskPerformanceRecorded
+// domain event onto envelope.TopicLaborPerformanceEvents — the
+// integration topic added by ADR 0013 — as an envelope.Envelope (the
+// SAME outer shape fulfillment-execution's own integration publisher
+// uses, not the AnalyticsEnvelope's schema_version-carrying variant:
+// this is a Published Language for other bounded contexts, not the
+// internal analytics stream).
+//
+// Only TaskPerformanceRecorded is part of the integration contract today.
+// LaborStandardDefined/LaborStandardRevised stay analytics-only — a
+// consumer needing them can be added to this publisher's marshalData in
+// a later, additive change; ADR 0013 explains why the first cut is
+// scoped to TaskPerformanceRecorded.
+//
+// It satisfies ports.EventPublisher, so the composition root can hand it
+// the same event stream the log and analytics publishers get, and it
+// satisfies the kafka.Encoder used by the transactional outbox (ADR
+// 0010) — the exact pattern AnalyticsPublisher already follows.
+type IntegrationPublisher struct {
+	Writer Writer
+	// NewID mints the envelope's event_id. It is the downstream
+	// consumer's idempotency key, so it must be unique per published
+	// message.
+	NewID func() string
+}
+
+// NewIntegrationPublisher constructs an IntegrationPublisher writing to
+// the integration topic on brokers. newID mints each envelope's
+// event_id.
+func NewIntegrationPublisher(brokers []string, newID func() string) *IntegrationPublisher {
+	return &IntegrationPublisher{
+		Writer: &kafkago.Writer{
+			Addr:                   kafkago.TCP(brokers...),
+			Topic:                  envelope.TopicLaborPerformanceEvents,
+			Balancer:               &kafkago.LeastBytes{},
+			AllowAutoTopicCreation: true,
+		},
+		NewID: newID,
+	}
+}
+
+// Publish emits every TaskPerformanceRecorded event onto the integration
+// topic. Any other event type is skipped rather than erroring, so the
+// caller can hand it the full event stream indiscriminately.
+func (p *IntegrationPublisher) Publish(ctx context.Context, events ...shared.DomainEvent) error {
+	for _, event := range events {
+		msgs, err := p.Encode(ctx, event)
+		if err != nil {
+			return err
+		}
+		for _, msg := range msgs {
+			if err := p.write(ctx, msg); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Encode maps every TaskPerformanceRecorded event to its integration
+// message — envelope, partition key and the W3C trace headers of the
+// span active in ctx — without writing anything. Every other event type
+// produces no message. The trace context is captured HERE, not at send
+// time, for the same reason AnalyticsPublisher.Encode does: in outbox
+// mode the send happens later on the relay goroutine, which has no
+// request span of its own.
+func (p *IntegrationPublisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([]Encoded, error) {
+	out := make([]Encoded, 0, len(events))
+	for _, event := range events {
+		eventType, key, data, ok := integrationData(event)
+		if !ok {
+			continue
+		}
+
+		payload, err := json.Marshal(envelope.Envelope{
+			EventId:    p.newID(),
+			EventType:  eventType,
+			OccurredAt: event.OccurredAt(),
+			Source:     envelope.Source,
+			Data:       data,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("kafka: marshal integration envelope: %w", err)
+		}
+		headers := []kafkago.Header{}
+		otelkafka.Inject(ctx, &headers)
+		out = append(out, Encoded{
+			Topic:     envelope.TopicLaborPerformanceEvents,
+			EventType: eventType,
+			Key:       []byte(key),
+			Value:     payload,
+			Headers:   headers,
+		})
+	}
+	return out, nil
+}
+
+// newID mints an envelope event id, returning "" only when no generator
+// was injected (which never happens in wiring, but keeps the zero value
+// usable).
+func (p *IntegrationPublisher) newID() string {
+	if p.NewID == nil {
+		return ""
+	}
+	return p.NewID()
+}
+
+// integrationData maps a domain event to its integration event_type,
+// partition key, and snake_case JSON payload. The bool return is false
+// for an event type outside the integration contract, so Encode can skip
+// it.
+//
+// The partition key is the AssociateId — not the TaskType the analytics
+// stream keys on — because the intended first consumer (workforce-
+// management, ADR 0013) builds a per-associate read cache and needs
+// every event for one associate applied in publish order on a single
+// partition. A robot-station task with no associate keys on the empty
+// string, which is a legitimate, expected key (every such task lands on
+// the same partition as every other unattributed one; still in order
+// relative to each other).
+func integrationData(e shared.DomainEvent) (eventType, key string, data json.RawMessage, ok bool) {
+	switch ev := e.(type) {
+	case shared.TaskPerformanceRecorded:
+		return envelope.EventTypeTaskPerformanceRecorded, string(ev.AssociateId), mustMarshal(map[string]any{
+			"task_id":      ev.TaskId,
+			"associate_id": string(ev.AssociateId),
+			"task_type":    string(ev.TaskType),
+			// A nil EfficiencyPct marshals to JSON null, which a
+			// consumer must not coerce to 0 — the "unscorable" fact
+			// travels over the wire intact, exactly as it does on the
+			// analytics stream.
+			"efficiency_pct": ev.EfficiencyPct,
+			"actual_seconds": ev.ActualSeconds,
+			// A nil IdleSecondsBefore likewise marshals to JSON null
+			// — "not observed", never a fabricated 0. ADDITIVE field:
+			// a Conformist unmarshaling unknown-field-tolerant JSON
+			// (e.g. workforce-management's laborperformancecache) is
+			// unaffected by its presence.
+			"idle_seconds_before": ev.IdleSecondsBefore,
+			"completed_at":        ev.CompletedAt,
+		}), true
+
+	default:
+		return "", "", nil, false
+	}
+}
+
+// write publishes one already-encoded message inside a producer span,
+// injecting that span's context into the message headers so a
+// downstream consumer's span becomes its child.
+func (p *IntegrationPublisher) write(ctx context.Context, msg Encoded) error {
+	ctx, span := otelkafka.StartPublishSpan(ctx, envelope.TopicLaborPerformanceEvents)
+	defer span.End()
+
+	headers := append([]kafkago.Header{}, msg.Headers...)
+	otelkafka.Inject(ctx, &headers)
+
+	if err := p.Writer.WriteMessages(ctx, kafkago.Message{
+		Key:     msg.Key,
+		Value:   msg.Value,
+		Headers: headers,
+	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return fmt.Errorf("kafka: publish %s integration event: %w", msg.EventType, err)
+	}
+	return nil
+}
+
+// Close releases the underlying Kafka writer, if it is a real one.
+func (p *IntegrationPublisher) Close() error {
+	if w, ok := p.Writer.(*kafkago.Writer); ok {
+		return w.Close()
+	}
+	return nil
+}
+
+// Compile-time assertions that IntegrationPublisher satisfies the
+// outbound event-publishing port and the outbox's Encoder.
+var (
+	_ ports.EventPublisher = (*IntegrationPublisher)(nil)
+	_ Encoder              = (*IntegrationPublisher)(nil)
+)

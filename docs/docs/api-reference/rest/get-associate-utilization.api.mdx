@@ -1,0 +1,71 @@
+---
+id: get-associate-utilization
+title: "Get one associate's idle-gap / utilization over a trailing window"
+description: "Measured task time vs. measured idle time for one associate, plus the still-running open-gap contribution when that associate is idle right now. Always returns 200, including a zero-count result for an associate this service has never observed."
+sidebar_label: "Get one associate's idle-gap / utilization over a trailing window"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "get api-method"
+info_path: docs/api-reference/rest/labor-performance-api
+custom_edit_url: null
+hide_send_button: true
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Get one associate's idle-gap / utilization over a trailing window"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/associates/{associateId}/utilization"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Measured task time vs. measured idle time for one associate, plus the still-running open-gap contribution when that associate is idle right now. Always returns 200, including a zero-count result for an associate this service has never observed.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./get-associate-utilization.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-associate-utilization.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-associate-utilization.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      
