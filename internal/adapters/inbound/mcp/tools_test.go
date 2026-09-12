@@ -24,6 +24,7 @@ type harness struct {
 	standards    *memory.StandardRepo
 	performances *memory.PerformanceRepo
 	processed    *memory.ProcessedEventRepo
+	idlePeriods  *memory.IdlePeriodRepo
 	clock        memory.FixedClock
 
 	defineStandard        *usecases.DefineStandard
@@ -37,6 +38,7 @@ func newHarness(t *testing.T) *harness {
 	standards := memory.NewStandardRepo()
 	performances := memory.NewPerformanceRepo()
 	processed := memory.NewProcessedEventRepo()
+	idlePeriods := memory.NewIdlePeriodRepo()
 	publisher := events.NewLogPublisher(nil)
 	clock := memory.FixedClock{At: base}
 
@@ -45,15 +47,17 @@ func newHarness(t *testing.T) *harness {
 		standards:    standards,
 		performances: performances,
 		processed:    processed,
+		idlePeriods:  idlePeriods,
 		clock:        clock,
 
 		defineStandard:        &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock},
-		recordTaskPerformance: &usecases.RecordTaskPerformance{Performances: performances, Standards: standards, Processed: processed, Events: publisher, Clock: clock},
+		recordTaskPerformance: &usecases.RecordTaskPerformance{Performances: performances, Standards: standards, Processed: processed, Events: publisher, Clock: clock, IdlePeriods: idlePeriods},
 	}
 	h.deps = Deps{
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: performances},
 		GetStandard:            &usecases.GetStandard{Standards: standards},
+		GetUtilization:         &usecases.GetUtilization{Performances: performances, IdlePeriods: idlePeriods, Clock: clock},
 	}
 	return h
 }
@@ -224,6 +228,66 @@ func TestGetLaborStandard(t *testing.T) {
 			h.mustDefineStandard(shared.Pick, 60)
 
 			out, err := h.deps.getLaborStandard(h.ctx(), laborStandardInput{TaskType: tc.taskType})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			tc.assert(t, out)
+		})
+	}
+}
+
+func TestGetTaskTypeUtilization(t *testing.T) {
+	tests := []struct {
+		name     string
+		taskType string
+		wantErr  bool
+		assert   func(t *testing.T, out utilizationDTO)
+	}{
+		{"empty taskType rejected", "", true, nil},
+		{"invalid taskType rejected", "NOPE", true, nil},
+		{
+			name:     "never-observed task type still returns successfully",
+			taskType: "SLAM",
+			assert: func(t *testing.T, out utilizationDTO) {
+				if out.TaskType != "SLAM" || out.TaskSeconds != 0 || out.IdleSeconds != 0 {
+					t.Fatalf("expected zero-count SLAM utilization, got %+v", out)
+				}
+				if out.UtilizationPct != nil {
+					t.Fatalf("UtilizationPct = %v, want nil for a never-observed task type", *out.UtilizationPct)
+				}
+			},
+		},
+		{
+			name:     "utilization computed from real recorded rows",
+			taskType: "PICK",
+			assert: func(t *testing.T, out utilizationDTO) {
+				if out.TaskType != "PICK" {
+					t.Fatalf("unexpected PICK utilization %+v", out)
+				}
+				if out.TaskSeconds != 60 || out.IdleSeconds != 70 {
+					t.Fatalf("unexpected task/idle seconds %+v", out)
+				}
+				if out.UtilizationPct == nil {
+					t.Fatal("expected a non-nil utilizationPct")
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.mustRecordTaskPerformance("evt-1", "task-1", "assoc-1", shared.Pick, 30, base.Add(30*time.Second))
+			h.mustRecordTaskPerformance("evt-2", "task-2", "assoc-1", shared.Pick, 30,
+				base.Add(30*time.Second).Add(70*time.Second).Add(30*time.Second))
+
+			out, err := h.deps.getTaskTypeUtilization(h.ctx(), taskTypeUtilizationInput{TaskType: tc.taskType, WindowSeconds: 7200})
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")

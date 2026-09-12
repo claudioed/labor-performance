@@ -33,7 +33,7 @@ func TestIntegrationPublisherPublishesTaskPerformanceRecorded(t *testing.T) {
 	p, w := newTestIntegrationPublisher()
 
 	event := shared.NewTaskPerformanceRecorded(
-		at(11), "task-1", shared.AssociateId("assoc-1"), shared.Pack, 52, &pct, at(9))
+		at(11), "task-1", shared.AssociateId("assoc-1"), shared.Pack, 52, &pct, nil, at(9))
 
 	if err := p.Publish(context.Background(), event); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -83,7 +83,7 @@ func TestIntegrationPublisherPreservesNilEfficiency(t *testing.T) {
 	p, w := newTestIntegrationPublisher()
 
 	event := shared.NewTaskPerformanceRecorded(
-		at(9), "task-1", shared.AssociateId(""), shared.TaskType(""), 0, nil, at(9))
+		at(9), "task-1", shared.AssociateId(""), shared.TaskType(""), 0, nil, nil, at(9))
 
 	if err := p.Publish(context.Background(), event); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -124,8 +124,8 @@ func TestIntegrationPublisherMintsAUniqueEventIdPerMessage(t *testing.T) {
 	p, w := newTestIntegrationPublisher()
 
 	err := p.Publish(context.Background(),
-		shared.NewTaskPerformanceRecorded(at(9), "task-1", shared.AssociateId("assoc-1"), shared.Pick, 45, &pct1, at(9)),
-		shared.NewTaskPerformanceRecorded(at(10), "task-2", shared.AssociateId("assoc-1"), shared.Pick, 50, &pct2, at(10)),
+		shared.NewTaskPerformanceRecorded(at(9), "task-1", shared.AssociateId("assoc-1"), shared.Pick, 45, &pct1, nil, at(9)),
+		shared.NewTaskPerformanceRecorded(at(10), "task-2", shared.AssociateId("assoc-1"), shared.Pick, 50, &pct2, nil, at(10)),
 	)
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -146,7 +146,7 @@ func TestIntegrationPublisherPropagatesWriteErrors(t *testing.T) {
 	p := &IntegrationPublisher{Writer: w, NewID: seqIDs()}
 
 	err := p.Publish(context.Background(),
-		shared.NewTaskPerformanceRecorded(at(9), "task-1", shared.AssociateId("assoc-1"), shared.Pick, 45, nil, at(9)))
+		shared.NewTaskPerformanceRecorded(at(9), "task-1", shared.AssociateId("assoc-1"), shared.Pick, 45, nil, nil, at(9)))
 	if err == nil {
 		t.Fatal("want the writer's error to surface")
 	}
@@ -155,7 +155,7 @@ func TestIntegrationPublisherPropagatesWriteErrors(t *testing.T) {
 func TestIntegrationPublisherInjectsTraceHeaders(t *testing.T) {
 	p, w := newTestIntegrationPublisher()
 
-	event := shared.NewTaskPerformanceRecorded(at(9), "task-1", shared.AssociateId("assoc-1"), shared.Pick, 45, nil, at(9))
+	event := shared.NewTaskPerformanceRecorded(at(9), "task-1", shared.AssociateId("assoc-1"), shared.Pick, 45, nil, nil, at(9))
 	if err := p.Publish(context.Background(), event); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestIntegrationPublisherEncodeDoesNotWrite(t *testing.T) {
 	p, w := newTestIntegrationPublisher()
 
 	msgs, err := p.Encode(context.Background(),
-		shared.NewTaskPerformanceRecorded(at(9), "task-1", shared.AssociateId("assoc-1"), shared.Pick, 45, nil, at(9)),
+		shared.NewTaskPerformanceRecorded(at(9), "task-1", shared.AssociateId("assoc-1"), shared.Pick, 45, nil, nil, at(9)),
 		unknownEvent{},
 	)
 	if err != nil {
@@ -196,7 +196,7 @@ func TestIntegrationPublisherEncodeDoesNotWrite(t *testing.T) {
 // stores what Encode returns and the direct path writes what Publish
 // builds.
 func TestIntegrationPublisherPublishWritesExactlyWhatEncodeProduces(t *testing.T) {
-	event := shared.NewTaskPerformanceRecorded(at(9), "task-1", shared.AssociateId("assoc-1"), shared.Pick, 45, nil, at(9))
+	event := shared.NewTaskPerformanceRecorded(at(9), "task-1", shared.AssociateId("assoc-1"), shared.Pick, 45, nil, nil, at(9))
 
 	encoder := &IntegrationPublisher{NewID: func() string { return "evt-fixed" }}
 	encoded, err := encoder.Encode(context.Background(), event)

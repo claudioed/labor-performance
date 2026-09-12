@@ -10,6 +10,7 @@ import (
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
+	"github.com/claudioed/labor-performance/internal/domain/shared"
 )
 
 // fixture wires just enough of the real stack (in-memory repos, the
@@ -39,9 +40,14 @@ func newFixture() fixture {
 
 func taskCompletedEnvelope(t *testing.T, eventId, taskId, associateId string, durationSeconds int64) envelope.Envelope {
 	t.Helper()
+	return taskCompletedEnvelopeWithType(t, eventId, taskId, associateId, durationSeconds, "")
+}
+
+func taskCompletedEnvelopeWithType(t *testing.T, eventId, taskId, associateId string, durationSeconds int64, taskType string) envelope.Envelope {
+	t.Helper()
 	data, err := json.Marshal(taskCompletedData{
 		TaskId: taskId, StationId: "station-1", WorkUnitId: "wu-1",
-		AssociateId: associateId, DurationSeconds: durationSeconds,
+		AssociateId: associateId, DurationSeconds: durationSeconds, TaskType: taskType,
 	})
 	if err != nil {
 		t.Fatalf("marshal data: %v", err)
@@ -135,5 +141,59 @@ func TestHandleFulfillmentEvent_DegradesGracefullyOnOlderPayload(t *testing.T) {
 	// event_id as already processed.
 	if err := f.consumer.handleFulfillmentEvent(context.Background(), env); err != nil {
 		t.Fatalf("redelivered handleFulfillmentEvent: %v", err)
+	}
+}
+
+// TaskType now arrives on the wire (fulfillment-execution ADR-0023,
+// closing this service's own ADR-0014 gap): a recognized value must
+// bucket the recorded TaskPerformance under that exact type, not
+// "unclassified" — verified via ScorecardFor's ByTaskType map, the
+// real read path GetTaskTypeUtilization and friends depend on.
+func TestHandleFulfillmentEvent_RecordsRecognizedTaskType(t *testing.T) {
+	f := newFixture()
+
+	env := taskCompletedEnvelopeWithType(t, "evt-typed", "task-1", "assoc-1", 52, "PICK")
+	if err := f.consumer.handleFulfillmentEvent(context.Background(), env); err != nil {
+		t.Fatalf("handleFulfillmentEvent: %v", err)
+	}
+
+	sc, err := f.performances.ScorecardFor(context.Background(), "assoc-1")
+	if err != nil {
+		t.Fatalf("ScorecardFor: %v", err)
+	}
+	breakdown, ok := sc.ByTaskType[shared.Pick]
+	if !ok {
+		t.Fatal("expected a PICK entry in ByTaskType, got none — task_type did not flow through")
+	}
+	if breakdown.TaskCount != 1 {
+		t.Fatalf("ByTaskType[PICK].TaskCount = %d, want 1", breakdown.TaskCount)
+	}
+	if _, unclassified := sc.ByTaskType[shared.TaskType("")]; unclassified {
+		t.Fatal("event was wrongly bucketed as unclassified despite a recognized task_type on the wire")
+	}
+}
+
+// An unrecognized task_type (REBIN is fulfillment-execution's fourth task
+// type, but this service does not model REBIN engineered labor standards)
+// must degrade to unclassified exactly like an absent value always has —
+// never rejected, never mis-bucketed under a fabricated type.
+func TestHandleFulfillmentEvent_UnrecognizedTaskTypeDegradesToUnclassified(t *testing.T) {
+	f := newFixture()
+
+	env := taskCompletedEnvelopeWithType(t, "evt-rebin", "task-1", "assoc-1", 52, "REBIN")
+	if err := f.consumer.handleFulfillmentEvent(context.Background(), env); err != nil {
+		t.Fatalf("handleFulfillmentEvent: %v", err)
+	}
+
+	sc, err := f.performances.ScorecardFor(context.Background(), "assoc-1")
+	if err != nil {
+		t.Fatalf("ScorecardFor: %v", err)
+	}
+	if _, ok := sc.ByTaskType[shared.TaskType("REBIN")]; ok {
+		t.Fatal("REBIN must never appear as its own bucket — this service does not model it")
+	}
+	unclassified, ok := sc.ByTaskType[shared.TaskType("")]
+	if !ok || unclassified.TaskCount != 1 {
+		t.Fatal("expected the REBIN completion to be recorded under the unclassified (\"\") bucket")
 	}
 }

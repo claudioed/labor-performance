@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -88,12 +89,21 @@ func run() error {
 	}
 
 	recordTaskPerformance := &usecases.RecordTaskPerformance{
+		Performances:      performances,
+		Standards:         standards,
+		Processed:         processed,
+		Events:            publisher,
+		Clock:             clock,
+		UnitOfWork:        persistence.uow,
+		IdlePeriods:       persistence.idlePeriods,
+		IdleGapCapSeconds: idleGapCapSecondsEnv(),
+		Logger:            logger,
+	}
+
+	getUtilization := &usecases.GetUtilization{
 		Performances: performances,
-		Standards:    standards,
-		Processed:    processed,
-		Events:       publisher,
+		IdlePeriods:  persistence.idlePeriods,
 		Clock:        clock,
-		UnitOfWork:   persistence.uow,
 	}
 
 	server := &inboundhttp.Server{
@@ -101,6 +111,7 @@ func run() error {
 		GetStandard:            &usecases.GetStandard{Standards: standards},
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: performances},
+		GetUtilization:         getUtilization,
 	}
 
 	httpServer := &http.Server{
@@ -277,6 +288,7 @@ type persistence struct {
 	standards    ports.StandardRepo
 	performances ports.PerformanceRepo
 	processed    ports.ProcessedEvents
+	idlePeriods  ports.IdlePeriodRepo
 	pool         *pgxpool.Pool
 	uow          ports.UnitOfWork
 	close        func()
@@ -292,6 +304,7 @@ func buildPersistence(ctx context.Context, databaseURL, migrationsPath string, l
 			standards:    memory.NewStandardRepo(),
 			performances: memory.NewPerformanceRepo(),
 			processed:    memory.NewProcessedEventRepo(),
+			idlePeriods:  memory.NewIdlePeriodRepo(),
 			close:        func() {},
 		}, nil
 	}
@@ -307,6 +320,7 @@ func buildPersistence(ctx context.Context, databaseURL, migrationsPath string, l
 		standards:    postgres.NewStandardRepo(pool),
 		performances: postgres.NewPerformanceRepo(pool),
 		processed:    postgres.NewProcessedEventRepo(pool),
+		idlePeriods:  postgres.NewIdlePeriodRepo(pool),
 		pool:         pool,
 		uow:          postgres.NewUnitOfWork(pool),
 		close:        pool.Close,
@@ -333,4 +347,21 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// idleGapCapSecondsEnv resolves IDLE_GAP_CAP_SECONDS, falling back to
+// RecordTaskPerformance's own defaultIdleGapCapSeconds (3600) on absence
+// or a malformed/non-positive value — a typo here must degrade
+// gracefully, not crash the boot, mirroring durationEnv's discipline for
+// OUTBOX_RELAY_INTERVAL.
+func idleGapCapSecondsEnv() int64 {
+	v := os.Getenv("IDLE_GAP_CAP_SECONDS")
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
