@@ -76,17 +76,30 @@ type TaskPerformanceRecorded struct {
 	TaskType      TaskType
 	ActualSeconds int64
 	EfficiencyPct *float64
-	CompletedAt   time.Time
+	// IdleSecondsBefore is the measured idle gap immediately preceding
+	// this task's claim (previous completion -> this claim instant),
+	// mirroring EfficiencyPct's existing nullable-pointer pattern: nil
+	// -- never a fabricated number -- when there was no prior
+	// completion to measure from (this associate's first-ever
+	// observation), the gap was negative/zero (Kafka redelivered or
+	// reordered the underlying TaskCompleted events), or AssociateId is
+	// empty (no checked-in occupant, e.g. a robot station). ADDITIVE:
+	// existing consumers unmarshaling unknown-field-tolerant JSON are
+	// unaffected by this field's presence. See the idleness package and
+	// its ADR for the full "Idle Gap" vocabulary.
+	IdleSecondsBefore *int64
+	CompletedAt       time.Time
 }
 
-func NewTaskPerformanceRecorded(occurredAt time.Time, taskId string, associateId AssociateId, taskType TaskType, actualSeconds int64, efficiencyPct *float64, completedAt time.Time) TaskPerformanceRecorded {
+func NewTaskPerformanceRecorded(occurredAt time.Time, taskId string, associateId AssociateId, taskType TaskType, actualSeconds int64, efficiencyPct *float64, idleSecondsBefore *int64, completedAt time.Time) TaskPerformanceRecorded {
 	return TaskPerformanceRecorded{
-		base:          newBase("TaskPerformanceRecorded", occurredAt),
-		TaskId:        taskId,
-		AssociateId:   associateId,
-		TaskType:      taskType,
-		ActualSeconds: actualSeconds,
-		EfficiencyPct: efficiencyPct,
-		CompletedAt:   completedAt,
+		base:              newBase("TaskPerformanceRecorded", occurredAt),
+		TaskId:            taskId,
+		AssociateId:       associateId,
+		TaskType:          taskType,
+		ActualSeconds:     actualSeconds,
+		EfficiencyPct:     efficiencyPct,
+		IdleSecondsBefore: idleSecondsBefore,
+		CompletedAt:       completedAt,
 	}
 }

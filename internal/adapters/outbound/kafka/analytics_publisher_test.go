@@ -99,7 +99,7 @@ func TestAnalyticsPublisherPublishesEachDomainEvent(t *testing.T) {
 		{
 			name: "TaskPerformanceRecorded",
 			event: shared.NewTaskPerformanceRecorded(
-				at(11), "task-1", shared.AssociateId("assoc-1"), shared.Pack, 52, &pct, at(9)),
+				at(11), "task-1", shared.AssociateId("assoc-1"), shared.Pack, 52, &pct, nil, at(9)),
 			wantEventType: envelope.EventTypeTaskPerformanceRecorded,
 			wantKey:       "PACK",
 			assertData: func(t *testing.T, data map[string]any) {
@@ -162,7 +162,7 @@ func TestAnalyticsPublisherPreservesNilEfficiency(t *testing.T) {
 	// An unscorable task. The nil must reach the wire as JSON null so
 	// the projector can tell "unscorable" from "0% efficient".
 	event := shared.NewTaskPerformanceRecorded(
-		at(9), "task-1", shared.AssociateId(""), shared.TaskType(""), 0, nil, at(9))
+		at(9), "task-1", shared.AssociateId(""), shared.TaskType(""), 0, nil, nil, at(9))
 
 	if err := p.Publish(context.Background(), event); err != nil {
 		t.Fatalf("Publish: %v", err)

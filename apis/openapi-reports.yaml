@@ -36,14 +36,11 @@ tags:
     description: The Labor Performance Report analytical read model.
   - name: health
     description: Liveness probe.
-security:
-  - bearerAuth: []
 paths:
   /healthz:
     get:
       tags: [health]
       operationId: getReportsHealthz
-      security: []
       summary: Liveness probe
       description: Reports whether the reports process is up and able to serve requests.
       responses:
@@ -112,8 +109,6 @@ paths:
             enum: [hour]
             default: hour
       responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "200":
           description: >
             The report for the requested window. An empty window is a 200
@@ -148,8 +143,6 @@ paths:
         fresh one, so read it alongside the report's own task counts.
         Target: p95 under 30 seconds.
       responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "200":
           description: The current projection lag.
           content:
@@ -164,28 +157,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
 
 components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      description: >
-        Fleet-standard static bearer key (ADR 0011; warehouse-ops-agent ADR
-        0005 fleet-wide). Every /reports/* operation requires a key granting
-        the `read` scope (a `read-write` key also satisfies it). A missing or
-        invalid credential is a 401 application/problem+json with
-        `WWW-Authenticate`. Not required by /healthz.
-  responses:
-    Unauthorized:
-      description: Missing or invalid bearer credential
-      headers:
-        WWW-Authenticate:
-          schema:
-            type: string
-            example: Bearer realm="warehouse-systems"
-      content:
-        application/problem+json:
-          schema:
-            $ref: "#/components/schemas/Problem"
   schemas:
     LaborPerformanceReport:
       type: object

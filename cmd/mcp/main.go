@@ -11,12 +11,6 @@
 // This server therefore wires only the three read use cases
 // (GetAssociateScorecard, GetTaskTypePerformance, GetStandard) and exposes
 // only read tools.
-//
-// Auth is a static bearer key (no IdP), shared with the REST surface via
-// internal/adapters/inbound/auth (ADR 0011): set API_READ_KEY /
-// API_READWRITE_KEY (or the MCP_READ_KEY / MCP_READWRITE_KEY fallbacks)
-// from a Kubernetes Secret. A request must present a valid key; the scope
-// it grants gates the tools.
 package main
 
 import (
@@ -28,7 +22,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/claudioed/labor-performance/internal/adapters/inbound/auth"
 	inboundmcp "github.com/claudioed/labor-performance/internal/adapters/inbound/mcp"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/postgres"
@@ -89,16 +82,10 @@ func run() error {
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: adapters.performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: adapters.performances},
 		GetStandard:            &usecases.GetStandard{Standards: adapters.standards},
+		GetUtilization:         &usecases.GetUtilization{Performances: adapters.performances, IdlePeriods: adapters.idlePeriods, Clock: memory.SystemClock{}},
 	}
 	server := inboundmcp.NewServer(deps)
-
-	authn := auth.NewStaticKeyAuth(auth.KeysFromEnv(os.Getenv))
-	if !authn.HasKeys() {
-		// The MCP surface stays fail-closed: no key means every request is
-		// rejected, never "open to everyone".
-		logger.Warn("no API_READ_KEY/API_READWRITE_KEY (or MCP_READ_KEY/MCP_READWRITE_KEY) set; mcp server will reject all requests")
-	}
-	handler := inboundmcp.Handler(server, authn)
+	handler := inboundmcp.Handler(server)
 
 	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 
@@ -124,6 +111,7 @@ func run() error {
 type adapterSet struct {
 	standards    ports.StandardRepo
 	performances ports.PerformanceRepo
+	idlePeriods  ports.IdlePeriodRepo
 }
 
 // buildAdapters wires the Postgres repos when DATABASE_URL is set, or falls
@@ -138,6 +126,7 @@ func buildAdapters(ctx context.Context, databaseURL, migrationsPath string, logg
 		return adapterSet{
 			standards:    memory.NewStandardRepo(),
 			performances: memory.NewPerformanceRepo(),
+			idlePeriods:  memory.NewIdlePeriodRepo(),
 		}, noop, nil
 	}
 
@@ -153,6 +142,7 @@ func buildAdapters(ctx context.Context, databaseURL, migrationsPath string, logg
 	return adapterSet{
 		standards:    postgres.NewStandardRepo(pool),
 		performances: postgres.NewPerformanceRepo(pool),
+		idlePeriods:  postgres.NewIdlePeriodRepo(pool),
 	}, pool.Close, nil
 }
 

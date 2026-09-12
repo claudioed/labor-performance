@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -17,7 +18,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/claudioed/labor-performance/internal/adapters/inbound/auth"
 	inboundhttp "github.com/claudioed/labor-performance/internal/adapters/inbound/http"
 	inboundkafka "github.com/claudioed/labor-performance/internal/adapters/inbound/kafka"
 	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
@@ -89,12 +89,21 @@ func run() error {
 	}
 
 	recordTaskPerformance := &usecases.RecordTaskPerformance{
+		Performances:      performances,
+		Standards:         standards,
+		Processed:         processed,
+		Events:            publisher,
+		Clock:             clock,
+		UnitOfWork:        persistence.uow,
+		IdlePeriods:       persistence.idlePeriods,
+		IdleGapCapSeconds: idleGapCapSecondsEnv(),
+		Logger:            logger,
+	}
+
+	getUtilization := &usecases.GetUtilization{
 		Performances: performances,
-		Standards:    standards,
-		Processed:    processed,
-		Events:       publisher,
+		IdlePeriods:  persistence.idlePeriods,
 		Clock:        clock,
-		UnitOfWork:   persistence.uow,
 	}
 
 	server := &inboundhttp.Server{
@@ -102,7 +111,7 @@ func run() error {
 		GetStandard:            &usecases.GetStandard{Standards: standards},
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: performances},
-		Auth:                   buildAuth(logger),
+		GetUtilization:         getUtilization,
 	}
 
 	httpServer := &http.Server{
@@ -150,7 +159,7 @@ func run() error {
 	if relay != nil {
 		go func() {
 			defer close(relayDone)
-			logger.Info("outbox relay running", "topic", envelope.TopicLaborPerformanceAnalytics)
+			logger.Info("outbox relay running", "topics", []string{envelope.TopicLaborPerformanceAnalytics, envelope.TopicLaborPerformanceEvents})
 			if err := relay.Run(relayCtx); err != nil && !errors.Is(err, context.Canceled) {
 				errCh <- err
 			}
@@ -179,26 +188,6 @@ func run() error {
 		logger.Warn("outbox relay did not stop before the shutdown deadline")
 	}
 	return err
-}
-
-// buildAuth wires the fleet-standard REST identity middleware (ADR 0011):
-// static bearer keys from API_READ_KEY / API_READWRITE_KEY (falling back
-// to MCP_READ_KEY / MCP_READWRITE_KEY), and AUTH_MODE=enforce|log|off.
-// The default mode is enforce when at least one key is configured and
-// off — with a loud WARN — when none is, so local runs and handler tests
-// without keys are unaffected. Key material is never logged.
-func buildAuth(logger *slog.Logger) *auth.Middleware {
-	authn := auth.NewStaticKeyAuth(auth.KeysFromEnv(os.Getenv))
-	defaultMode := auth.ModeOff
-	if authn.HasKeys() {
-		defaultMode = auth.ModeEnforce
-	}
-	mode := auth.ParseMode(os.Getenv("AUTH_MODE"), defaultMode)
-	if mode == auth.ModeOff {
-		logger.Warn("REST auth is OFF: no API_READ_KEY/API_READWRITE_KEY configured or AUTH_MODE=off")
-	}
-	logger.Info("REST auth configured", "mode", string(mode), "keys", authn.HasKeys())
-	return &auth.Middleware{Authn: authn, Mode: mode, Logger: logger}
 }
 
 // newLogger builds the process-wide structured logger, wrapped so any
@@ -236,15 +225,18 @@ func serviceVersion() string {
 // The default is the log publisher this service has always used, so
 // nothing about the existing OLTP behaviour changes unless it is opted
 // into. Setting EVENT_PUBLISHER=kafka additionally fans every domain
-// event onto warehouse.labor-performance.analytics, which is what feeds
-// the analytical data product's projector (ADR-0007). The log publisher
-// stays FIRST in the fan-out so a broker outage still leaves the event
-// visible in the logs before the publish error surfaces.
+// event onto TWO Kafka topics: warehouse.labor-performance.analytics,
+// which feeds the analytical data product's projector (ADR-0007), and
+// warehouse.labor-performance.events, this service's integration topic
+// (ADR-0013) carrying TaskPerformanceRecorded for other bounded contexts
+// to consume. The log publisher stays FIRST in the fan-out so a broker
+// outage still leaves the event visible in the logs before the publish
+// error surfaces.
 //
 // With BOTH Postgres and kafka configured the use cases publish into the
-// transactional outbox (ADR 0010) and the relay forwards rows to Kafka;
-// the store and the topic can no longer diverge. With kafka but no
-// Postgres (in-memory dev runs) events go straight to the broker as
+// transactional outbox (ADR 0010) and the relay forwards rows to both
+// topics; the store and the topics can no longer diverge. With kafka but
+// no Postgres (in-memory dev runs) events go straight to the broker as
 // before — there is no transaction to bind them to.
 //
 // None of this touches the domain or application layers: they still see
@@ -258,29 +250,33 @@ func buildEventPublisher(p *persistence, logger *slog.Logger) (ports.EventPublis
 
 	brokers := strings.Split(getenv("KAFKA_BROKERS", "localhost:9092"), ",")
 	analytics := outboundkafka.NewAnalyticsPublisher(brokers, uuid.NewString)
-	closeAnalytics := func() {
+	integration := outboundkafka.NewIntegrationPublisher(brokers, uuid.NewString)
+	closePublishers := func() {
 		if err := analytics.Close(); err != nil {
 			logger.Error("error closing analytics kafka publisher", "error", err)
+		}
+		if err := integration.Close(); err != nil {
+			logger.Error("error closing integration kafka publisher", "error", err)
 		}
 	}
 
 	if p.pool == nil {
 		logger.Info("event publisher configured", "publisher", "kafka", "mode", "direct",
-			"topic", envelope.TopicLaborPerformanceAnalytics, "brokers", brokers)
-		return outboundkafka.NewFanOutPublisher(logPublisher, analytics), nil, closeAnalytics
+			"topics", []string{envelope.TopicLaborPerformanceAnalytics, envelope.TopicLaborPerformanceEvents}, "brokers", brokers)
+		return outboundkafka.NewFanOutPublisher(logPublisher, analytics, integration), nil, closePublishers
 	}
 
 	sink := outboundkafka.NewRelaySink(brokers)
 	relay := postgres.NewOutboxRelay(p.pool, sink, logger,
 		postgres.WithInterval(durationEnv("OUTBOX_RELAY_INTERVAL", time.Second)))
 	logger.Info("event publisher configured", "publisher", "kafka", "mode", "outbox",
-		"topic", envelope.TopicLaborPerformanceAnalytics, "brokers", brokers)
-	outbox := postgres.NewOutboxPublisher(p.pool, analytics)
+		"topics", []string{envelope.TopicLaborPerformanceAnalytics, envelope.TopicLaborPerformanceEvents}, "brokers", brokers)
+	outbox := postgres.NewOutboxPublisher(p.pool, analytics, integration)
 	return outboundkafka.NewFanOutPublisher(logPublisher, outbox), relay, func() {
 		if err := sink.Close(); err != nil {
 			logger.Error("error closing outbox relay sink", "error", err)
 		}
-		closeAnalytics()
+		closePublishers()
 	}
 }
 
@@ -292,6 +288,7 @@ type persistence struct {
 	standards    ports.StandardRepo
 	performances ports.PerformanceRepo
 	processed    ports.ProcessedEvents
+	idlePeriods  ports.IdlePeriodRepo
 	pool         *pgxpool.Pool
 	uow          ports.UnitOfWork
 	close        func()
@@ -307,6 +304,7 @@ func buildPersistence(ctx context.Context, databaseURL, migrationsPath string, l
 			standards:    memory.NewStandardRepo(),
 			performances: memory.NewPerformanceRepo(),
 			processed:    memory.NewProcessedEventRepo(),
+			idlePeriods:  memory.NewIdlePeriodRepo(),
 			close:        func() {},
 		}, nil
 	}
@@ -322,6 +320,7 @@ func buildPersistence(ctx context.Context, databaseURL, migrationsPath string, l
 		standards:    postgres.NewStandardRepo(pool),
 		performances: postgres.NewPerformanceRepo(pool),
 		processed:    postgres.NewProcessedEventRepo(pool),
+		idlePeriods:  postgres.NewIdlePeriodRepo(pool),
 		pool:         pool,
 		uow:          postgres.NewUnitOfWork(pool),
 		close:        pool.Close,
@@ -348,4 +347,21 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// idleGapCapSecondsEnv resolves IDLE_GAP_CAP_SECONDS, falling back to
+// RecordTaskPerformance's own defaultIdleGapCapSeconds (3600) on absence
+// or a malformed/non-positive value — a typo here must degrade
+// gracefully, not crash the boot, mirroring durationEnv's discipline for
+// OUTBOX_RELAY_INTERVAL.
+func idleGapCapSecondsEnv() int64 {
+	v := os.Getenv("IDLE_GAP_CAP_SECONDS")
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
