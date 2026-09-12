@@ -124,3 +124,27 @@ func (r *PerformanceRepo) RecentByAssociateID(ctx context.Context, associateId s
 	}
 	return out, nil
 }
+
+// SumActualSecondsByTaskType returns the total ActualSeconds across rows
+// for taskType whose CompletedAt is on or after since.
+func (r *PerformanceRepo) SumActualSecondsByTaskType(ctx context.Context, taskType shared.TaskType, since time.Time) (int64, error) {
+	var sum int64
+	err := querierFrom(ctx, r.pool).QueryRow(ctx, `
+		SELECT COALESCE(SUM(actual_seconds), 0)
+		FROM task_performances
+		WHERE task_type = $1 AND completed_at >= $2
+	`, string(taskType), since).Scan(&sum)
+	return sum, err
+}
+
+// SumActualSecondsByAssociate is SumActualSecondsByTaskType's
+// per-associate counterpart.
+func (r *PerformanceRepo) SumActualSecondsByAssociate(ctx context.Context, associateId shared.AssociateId, since time.Time) (int64, error) {
+	var sum int64
+	err := querierFrom(ctx, r.pool).QueryRow(ctx, `
+		SELECT COALESCE(SUM(actual_seconds), 0)
+		FROM task_performances
+		WHERE associate_id = $1 AND completed_at >= $2
+	`, string(associateId), since).Scan(&sum)
+	return sum, err
+}

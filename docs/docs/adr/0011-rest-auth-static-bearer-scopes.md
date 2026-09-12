@@ -10,7 +10,8 @@ description: "labor-performance adopts the fleet-wide REST identity decision (wa
 
 ## Status
 
-**Accepted** — adopts the fleet-wide decision recorded in
+**Superseded by [ADR 0012 — Remove the REST/MCP identity layer](./0012-remove-rest-auth-layer.md).**
+Originally accepted, adopting the fleet-wide decision recorded in
 [warehouse-ops-agent ADR 0005 — Fleet REST identity: static bearer keys
 with read/read-write scopes, no IdP](https://github.com/claudioed/warehouse-ops-agent/blob/develop/docs/docs/adr/0005-rest-identity-static-bearer-scopes.md).
 That record holds the context, the alternatives considered (OIDC now,

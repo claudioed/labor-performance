@@ -72,8 +72,20 @@ const config: Config = {
               categoryLinkSource: 'tag',
             },
             hideSendButton: true,
-          } satisfies OpenApiPlugin.Options,
-        },
+          },
+          laborReports: {
+            // The read-only analytical surface served by cmd/labor-reports
+            // (ADR 0007) — a SEPARATE spec from the OLTP API above, generated
+            // into its own output dir so the two never collide.
+            specPath: '../apis/openapi-reports.yaml',
+            outputDir: 'docs/api-reference/rest-reports',
+            sidebarOptions: {
+              groupPathsBy: 'tag',
+              categoryLinkSource: 'tag',
+            },
+            hideSendButton: true,
+          },
+        } satisfies Record<string, OpenApiPlugin.Options>,
       },
     ],
   ],
@@ -103,6 +115,11 @@ const config: Config = {
           position: 'left',
         },
         {
+          to: '/docs/api-reference/rest-reports/labor-performance-reports-api',
+          label: 'Reports API',
+          position: 'left',
+        },
+        {
           to: '/docs/adr',
           label: 'ADRs',
           position: 'left',
@@ -124,6 +141,7 @@ const config: Config = {
             {label: 'Business Context', to: '/docs/business-context/domain-vision'},
             {label: 'Domain-Driven Design', to: '/docs/ddd/subdomain-classification'},
             {label: 'API Reference', to: '/docs/api-reference/rest/labor-performance-api'},
+            {label: 'Reports API Reference', to: '/docs/api-reference/rest-reports/labor-performance-reports-api'},
           ],
         },
         {

@@ -67,6 +67,17 @@ const (
 	EventTypeTaskPerformanceRecorded = "TaskPerformanceRecorded"
 )
 
+// TopicLaborPerformanceEvents is this service's INTEGRATION topic — its
+// Open-Host-Service Published Language for other bounded contexts, first
+// added by ADR 0013. It is SEPARATE from TopicLaborPerformanceAnalytics
+// (which feeds only this repo's own projector) so the two streams evolve
+// independently, and it is named with the same warehouse.<context>.events
+// convention fulfillment-execution's own integration topic
+// (warehouse.fulfillment.events) uses. Before ADR 0013 this service
+// published no integration event at all — it was the fleet's only pure
+// event sink.
+const TopicLaborPerformanceEvents = "warehouse.labor-performance.events"
+
 // TopicFulfillmentEvents is the shared, fan-out topic this service
 // consumes from — the SAME topic wes-work-planning already consumes,
 // per CLAUDE.md's "Inbound Kafka contract" section.

@@ -71,49 +71,6 @@ Name of the Secret holding DATABASE_URL, when the chart creates its own.
 {{- end }}
 
 {{/*
-Name of the Secret holding API_READ_KEY / API_READWRITE_KEY (ADR 0011), when
-the chart creates its own.
-*/}}
-{{- define "labor-performance.authSecretName" -}}
-{{- if .Values.auth.existingSecret }}
-{{- .Values.auth.existingSecret }}
-{{- else }}
-{{- include "labor-performance.fullname" . }}-auth
-{{- end }}
-{{- end }}
-
-{{/*
-Whether any REST auth Secret is wired at all (own keys or an existing Secret).
-*/}}
-{{- define "labor-performance.authSecretEnabled" -}}
-{{- if or .Values.auth.readKey .Values.auth.readWriteKey .Values.auth.existingSecret }}true{{- end }}
-{{- end }}
-
-{{/*
-The env entries every REST-serving container gets for the auth keys. Rendered
-only when a Secret is wired; the keys are optional so a Secret carrying only
-one of them still mounts cleanly.
-*/}}
-{{- define "labor-performance.authEnv" -}}
-- name: AUTH_MODE
-  value: {{ .Values.auth.mode | quote }}
-{{- if include "labor-performance.authSecretEnabled" . }}
-- name: API_READ_KEY
-  valueFrom:
-    secretKeyRef:
-      name: {{ include "labor-performance.authSecretName" . }}
-      key: API_READ_KEY
-      optional: true
-- name: API_READWRITE_KEY
-  valueFrom:
-    secretKeyRef:
-      name: {{ include "labor-performance.authSecretName" . }}
-      key: API_READWRITE_KEY
-      optional: true
-{{- end }}
-{{- end }}
-
-{{/*
 Fully qualified name of the analytics projector deployment (ADR-0007).
 */}}
 {{- define "labor-performance.projectorFullname" -}}
@@ -136,4 +93,23 @@ Name of the Secret holding the analytics DSNs, when the chart creates its own.
 {{- else }}
 {{- include "labor-performance.fullname" . }}-analytics
 {{- end }}
+{{- end }}
+
+{{/*
+Fully qualified name of the MCP server deployment/service (ADR-0009).
+*/}}
+{{- define "labor-performance.mcpFullname" -}}
+{{- include "labor-performance.fullname" . }}-mcp
+{{- end }}
+
+{{/*
+Fully qualified name of the frontend Module Federation remote deployment/service.
+
+The remote is served by its own nginx pod and reached through warehouse-infra's
+Nginx web gateway at /mfes/labor-performance/. It is deliberately a separate
+workload from the API: Kong never routes to it, and the OLTP Service must never
+select it.
+*/}}
+{{- define "labor-performance.frontendFullname" -}}
+{{- include "labor-performance.fullname" . }}-frontend
 {{- end }}

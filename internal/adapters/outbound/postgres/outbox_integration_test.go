@@ -104,6 +104,10 @@ func analyticsEncoder() *outboundkafka.AnalyticsPublisher {
 	return &outboundkafka.AnalyticsPublisher{NewID: uuid.NewString}
 }
 
+func integrationEncoder() *outboundkafka.IntegrationPublisher {
+	return &outboundkafka.IntegrationPublisher{NewID: uuid.NewString}
+}
+
 func TestOutbox_DefineStandard_CommitsAggregateAndEventTogether(t *testing.T) {
 	pool := outboxDB(t)
 	ctx := context.Background()
@@ -328,6 +332,55 @@ func TestOutboxRelay_SinkFailure_StopsAtFailedRowAndRetriesLater(t *testing.T) {
 	}
 	if got := countOutbox(t, pool, "key = 'PACK' AND attempts = 2 AND last_error IS NULL"); got != 1 {
 		t.Fatal("expected PACK's last_error cleared and attempts=2 after the successful retry")
+	}
+}
+
+func TestOutbox_RecordTaskPerformance_FansOutToBothAnalyticsAndIntegrationTopics(t *testing.T) {
+	pool := outboxDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	uc := &usecases.RecordTaskPerformance{
+		Performances: postgres.NewPerformanceRepo(pool),
+		Standards:    postgres.NewStandardRepo(pool),
+		Processed:    postgres.NewProcessedEventRepo(pool),
+		Events:       postgres.NewOutboxPublisher(pool, analyticsEncoder(), integrationEncoder()),
+		Clock:        memory.FixedClock{At: now},
+		UnitOfWork:   postgres.NewUnitOfWork(pool),
+	}
+	req := usecases.RecordTaskPerformanceRequest{KafkaEventId: "evt-fanout", TaskId: "task-fanout", AssociateId: "assoc-fanout", TaskType: shared.Pick, ActualSeconds: 41, CompletedAt: now}
+
+	if p, err := uc.Execute(ctx, req); err != nil || p == nil {
+		t.Fatalf("record: p=%v err=%v", p, err)
+	}
+
+	// ONE TaskPerformanceRecorded event, encoded through BOTH encoders,
+	// must produce ONE outbox row per topic — the fan-out variant of
+	// ADR 0010, extended by ADR 0013's integration topic.
+	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND topic = '%s' AND event_type = '%s' AND key = 'PICK'", envelope.TopicLaborPerformanceAnalytics, envelope.EventTypeTaskPerformanceRecorded)); got != 1 {
+		t.Fatalf("expected 1 unpublished analytics-topic row keyed PICK, got %d", got)
+	}
+	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND topic = '%s' AND event_type = '%s' AND key = 'assoc-fanout'", envelope.TopicLaborPerformanceEvents, envelope.EventTypeTaskPerformanceRecorded)); got != 1 {
+		t.Fatalf("expected 1 unpublished integration-topic row keyed assoc-fanout, got %d", got)
+	}
+	if got := countOutbox(t, pool, "true"); got != 2 {
+		t.Fatalf("expected exactly 2 outbox rows total (one per topic), got %d", got)
+	}
+
+	sink := &recordingSink{}
+	relay := postgres.NewOutboxRelay(pool, sink, slog.Default())
+	n, err := relay.RelayOnce(ctx)
+	if err != nil {
+		t.Fatalf("relay: %v", err)
+	}
+	if n != 2 || len(sink.sent) != 2 {
+		t.Fatalf("expected 2 published, got n=%d sent=%d", n, len(sink.sent))
+	}
+	gotTopics := map[string]bool{}
+	for _, m := range sink.sent {
+		gotTopics[m.Topic] = true
+	}
+	if !gotTopics[envelope.TopicLaborPerformanceAnalytics] || !gotTopics[envelope.TopicLaborPerformanceEvents] {
+		t.Fatalf("expected the relay to forward to both topics, got %v", sink.sent)
 	}
 }
 
