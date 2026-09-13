@@ -176,21 +176,29 @@ func (p *AnalyticsPublisher) newID() string {
 func marshalData(e shared.DomainEvent) (eventType, key string, data json.RawMessage, ok bool) {
 	switch ev := e.(type) {
 	case shared.LaborStandardDefined:
-		return envelope.EventTypeLaborStandardDefined, string(ev.TaskType), mustMarshal(map[string]any{
+		fields := map[string]any{
 			"standard_id":      string(ev.StandardId),
 			"task_type":        string(ev.TaskType),
 			"expected_seconds": ev.ExpectedSeconds,
 			"effective_from":   ev.EffectiveFrom,
-		}), true
+		}
+		if ev.TravelComponentSeconds != nil {
+			fields["travel_component_seconds"] = *ev.TravelComponentSeconds
+		}
+		return envelope.EventTypeLaborStandardDefined, string(ev.TaskType), mustMarshal(fields), true
 
 	case shared.LaborStandardRevised:
-		return envelope.EventTypeLaborStandardRevised, string(ev.TaskType), mustMarshal(map[string]any{
+		fields := map[string]any{
 			"standard_id":               string(ev.StandardId),
 			"task_type":                 string(ev.TaskType),
 			"previous_expected_seconds": ev.PreviousExpectedSeconds,
 			"expected_seconds":          ev.NewExpectedSeconds,
 			"effective_from":            ev.EffectiveFrom,
-		}), true
+		}
+		if ev.NewTravelComponentSeconds != nil {
+			fields["travel_component_seconds"] = *ev.NewTravelComponentSeconds
+		}
+		return envelope.EventTypeLaborStandardRevised, string(ev.TaskType), mustMarshal(fields), true
 
 	case shared.TaskPerformanceRecorded:
 		return envelope.EventTypeTaskPerformanceRecorded, string(ev.TaskType), mustMarshal(map[string]any{

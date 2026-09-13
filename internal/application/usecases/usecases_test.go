@@ -64,7 +64,7 @@ var baseTime = time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
 func TestDefineStandard_Success_FirstDefinition(t *testing.T) {
 	f := newFixture(baseTime)
 
-	s, err := f.defineStandard.Execute(context.Background(), shared.Pick, 45)
+	s, err := f.defineStandard.Execute(context.Background(), shared.Pick, 45, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestDefineStandard_Success_FirstDefinition(t *testing.T) {
 
 func TestDefineStandard_FailingPath_NonPositiveExpectedSeconds(t *testing.T) {
 	f := newFixture(baseTime)
-	_, err := f.defineStandard.Execute(context.Background(), shared.Pick, 0)
+	_, err := f.defineStandard.Execute(context.Background(), shared.Pick, 0, nil)
 	if !errors.Is(err, standard.ErrNonPositiveExpectedSeconds) {
 		t.Fatalf("error = %v, want ErrNonPositiveExpectedSeconds", err)
 	}
@@ -96,7 +96,7 @@ func TestDefineStandard_RecordsMetrics_OnAcceptedDefinition(t *testing.T) {
 	metrics := &fakeStandardMetrics{}
 
 	uc := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, Metrics: metrics}
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); err != nil {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
@@ -119,12 +119,12 @@ func TestDefineStandard_RecordsMetrics_OnRevision(t *testing.T) {
 	ctx := context.Background()
 
 	uc1 := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: memory.FixedClock{At: baseTime}, Metrics: metrics}
-	if _, err := uc1.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := uc1.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("first Execute: %v", err)
 	}
 
 	uc2 := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: memory.FixedClock{At: baseTime.Add(24 * time.Hour)}, Metrics: metrics}
-	if _, err := uc2.Execute(ctx, shared.Pick, 50); err != nil {
+	if _, err := uc2.Execute(ctx, shared.Pick, 50, nil); err != nil {
 		t.Fatalf("second Execute: %v", err)
 	}
 
@@ -146,7 +146,7 @@ func TestDefineStandard_RecordsMetrics_OnRejectedDefinition(t *testing.T) {
 	metrics := &fakeStandardMetrics{}
 
 	uc := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, Metrics: metrics}
-	_, err := uc.Execute(context.Background(), shared.Pick, 0)
+	_, err := uc.Execute(context.Background(), shared.Pick, 0, nil)
 	if !errors.Is(err, standard.ErrNonPositiveExpectedSeconds) {
 		t.Fatalf("error = %v, want ErrNonPositiveExpectedSeconds", err)
 	}
@@ -164,7 +164,7 @@ func TestDefineStandard_RecordsMetrics_OnRejectedDefinition(t *testing.T) {
 // ports.StandardMetrics.
 func TestDefineStandard_NilMetrics_DoesNotPanic(t *testing.T) {
 	f := newFixture(baseTime)
-	if _, err := f.defineStandard.Execute(context.Background(), shared.Pick, 45); err != nil {
+	if _, err := f.defineStandard.Execute(context.Background(), shared.Pick, 45, nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 }
@@ -177,14 +177,14 @@ func TestDefineStandard_Revision(t *testing.T) {
 	f := newFixture(baseTime)
 	ctx := context.Background()
 
-	first, err := f.defineStandard.Execute(ctx, shared.Pick, 45)
+	first, err := f.defineStandard.Execute(ctx, shared.Pick, 45, nil)
 	if err != nil {
 		t.Fatalf("first Execute: %v", err)
 	}
 
 	revisedAt := baseTime.Add(24 * time.Hour)
 	f2 := newFixtureAt(f, revisedAt)
-	second, err := f2.defineStandard.Execute(ctx, shared.Pick, 50)
+	second, err := f2.defineStandard.Execute(ctx, shared.Pick, 50, nil)
 	if err != nil {
 		t.Fatalf("second Execute: %v", err)
 	}
@@ -253,7 +253,7 @@ func newFixtureAt(f *fixture, at time.Time) *fixture {
 
 func TestGetStandard_Success(t *testing.T) {
 	f := newFixture(baseTime)
-	if _, err := f.defineStandard.Execute(context.Background(), shared.Pack, 60); err != nil {
+	if _, err := f.defineStandard.Execute(context.Background(), shared.Pack, 60, nil); err != nil {
 		t.Fatalf("DefineStandard: %v", err)
 	}
 
@@ -277,7 +277,7 @@ func TestGetStandard_FailingPath_NotFound(t *testing.T) {
 func TestRecordTaskPerformance_Success_WithActiveStandard(t *testing.T) {
 	f := newFixture(baseTime)
 	ctx := context.Background()
-	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("DefineStandard: %v", err)
 	}
 
@@ -321,7 +321,7 @@ func TestRecordTaskPerformance_NoActiveStandard(t *testing.T) {
 func TestRecordTaskPerformance_ZeroDurationSeconds(t *testing.T) {
 	f := newFixture(baseTime)
 	ctx := context.Background()
-	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("DefineStandard: %v", err)
 	}
 
@@ -524,7 +524,7 @@ func TestGetTaskTypePerformance_MeanActualSeconds_ExcludesUnmeasurableRows(t *te
 func TestGetAssociateScorecard_Trend_InsufficientDataBelowThreeScoredTasks(t *testing.T) {
 	f := newFixture(baseTime)
 	ctx := context.Background()
-	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("DefineStandard: %v", err)
 	}
 	for i := range 2 {
@@ -556,7 +556,7 @@ func TestGetAssociateScorecard_Trend_InsufficientDataBelowThreeScoredTasks(t *te
 func TestGetAssociateScorecard_CoachingFlag_ThreeConsecutiveBelowFloor(t *testing.T) {
 	f := newFixture(baseTime)
 	ctx := context.Background()
-	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 100); err != nil {
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 100, nil); err != nil {
 		t.Fatalf("DefineStandard: %v", err)
 	}
 
@@ -587,7 +587,7 @@ func TestGetAssociateScorecard_CoachingFlag_ThreeConsecutiveBelowFloor(t *testin
 func TestGetAssociateScorecard_CoachingFlag_RecentGoodTaskClearsFlag(t *testing.T) {
 	f := newFixture(baseTime)
 	ctx := context.Background()
-	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 100); err != nil {
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 100, nil); err != nil {
 		t.Fatalf("DefineStandard: %v", err)
 	}
 
@@ -644,7 +644,7 @@ func TestDefineStandard_PropagatesFindCurrentlyActiveError(t *testing.T) {
 	f := newFixture(baseTime)
 	wrapped := &failingStandardRepo{StandardRepo: f.standards, failFindCurrent: true}
 	uc := &usecases.DefineStandard{Standards: wrapped, Events: events.NewLogPublisher(nil), Clock: f.clock}
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); !errors.Is(err, errUnmapped) {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); !errors.Is(err, errUnmapped) {
 		t.Fatalf("error = %v, want errUnmapped", err)
 	}
 }
@@ -653,7 +653,7 @@ func TestDefineStandard_PropagatesNextIDError(t *testing.T) {
 	f := newFixture(baseTime)
 	wrapped := &failingStandardRepo{StandardRepo: f.standards, failNextID: true}
 	uc := &usecases.DefineStandard{Standards: wrapped, Events: events.NewLogPublisher(nil), Clock: f.clock}
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); !errors.Is(err, errUnmapped) {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); !errors.Is(err, errUnmapped) {
 		t.Fatalf("error = %v, want errUnmapped", err)
 	}
 }
@@ -662,7 +662,7 @@ func TestDefineStandard_PropagatesSaveError(t *testing.T) {
 	f := newFixture(baseTime)
 	wrapped := &failingStandardRepo{StandardRepo: f.standards, failSave: true}
 	uc := &usecases.DefineStandard{Standards: wrapped, Events: events.NewLogPublisher(nil), Clock: f.clock}
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); !errors.Is(err, errUnmapped) {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); !errors.Is(err, errUnmapped) {
 		t.Fatalf("error = %v, want errUnmapped", err)
 	}
 }
@@ -670,7 +670,7 @@ func TestDefineStandard_PropagatesSaveError(t *testing.T) {
 func TestDefineStandard_PropagatesPublishError(t *testing.T) {
 	f := newFixture(baseTime)
 	uc := &usecases.DefineStandard{Standards: f.standards, Events: &failingPublisher{fail: true}, Clock: f.clock}
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); !errors.Is(err, errUnmapped) {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); !errors.Is(err, errUnmapped) {
 		t.Fatalf("error = %v, want errUnmapped", err)
 	}
 }

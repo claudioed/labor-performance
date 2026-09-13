@@ -120,12 +120,12 @@ func TestOutbox_DefineStandard_CommitsAggregateAndEventTogether(t *testing.T) {
 		UnitOfWork: postgres.NewUnitOfWork(pool),
 	}
 
-	if _, err := uc.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := uc.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("define: %v", err)
 	}
 	// Revise: closes the prior and inserts a new one in the same scope.
 	uc.Clock = memory.FixedClock{At: now.Add(time.Minute)}
-	if _, err := uc.Execute(ctx, shared.Pick, 40); err != nil {
+	if _, err := uc.Execute(ctx, shared.Pick, 40, nil); err != nil {
 		t.Fatalf("revise: %v", err)
 	}
 
@@ -193,7 +193,7 @@ func TestOutbox_PublishFailure_RollsBackAggregate(t *testing.T) {
 	uow := postgres.NewUnitOfWork(pool)
 
 	define := &usecases.DefineStandard{Standards: postgres.NewStandardRepo(pool), Events: broken, Clock: memory.FixedClock{At: now}, UnitOfWork: uow}
-	if _, err := define.Execute(ctx, shared.Slam, 30); err == nil {
+	if _, err := define.Execute(ctx, shared.Slam, 30, nil); err == nil {
 		t.Fatal("expected the failing encoder to fail the publish")
 	}
 	if got := countRows(t, pool, "labor_standards", "task_type = 'SLAM'"); got != 0 {
@@ -235,11 +235,11 @@ func TestOutboxRelay_PublishesInOrderAndMarksRows(t *testing.T) {
 	uow := postgres.NewUnitOfWork(pool)
 
 	define := &usecases.DefineStandard{Standards: postgres.NewStandardRepo(pool), Events: pub, Clock: memory.FixedClock{At: now}, UnitOfWork: uow}
-	if _, err := define.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := define.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("define: %v", err)
 	}
 	define.Clock = memory.FixedClock{At: now.Add(time.Second)}
-	if _, err := define.Execute(ctx, shared.Pick, 40); err != nil {
+	if _, err := define.Execute(ctx, shared.Pick, 40, nil); err != nil {
 		t.Fatalf("revise: %v", err)
 	}
 	record := &usecases.RecordTaskPerformance{
@@ -289,7 +289,7 @@ func TestOutboxRelay_SinkFailure_StopsAtFailedRowAndRetriesLater(t *testing.T) {
 	uow := postgres.NewUnitOfWork(pool)
 	define := &usecases.DefineStandard{Standards: postgres.NewStandardRepo(pool), Events: pub, Clock: memory.FixedClock{At: now}, UnitOfWork: uow}
 	for _, tt := range []shared.TaskType{shared.Pick, shared.Pack, shared.Slam} {
-		if _, err := define.Execute(ctx, tt, 30); err != nil {
+		if _, err := define.Execute(ctx, tt, 30, nil); err != nil {
 			t.Fatalf("define %s: %v", tt, err)
 		}
 	}
@@ -389,7 +389,7 @@ func TestOutboxRelay_Run_DrainsUntilCancelled(t *testing.T) {
 	ctx := context.Background()
 	pub := postgres.NewOutboxPublisher(pool, analyticsEncoder())
 	define := &usecases.DefineStandard{Standards: postgres.NewStandardRepo(pool), Events: pub, Clock: memory.FixedClock{At: time.Now().UTC()}, UnitOfWork: postgres.NewUnitOfWork(pool)}
-	if _, err := define.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := define.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("define: %v", err)
 	}
 

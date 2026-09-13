@@ -66,7 +66,7 @@ func (h *harness) ctx() context.Context { return context.Background() }
 
 func (h *harness) mustDefineStandard(taskType shared.TaskType, expectedSeconds int64) {
 	h.t.Helper()
-	if _, err := h.defineStandard.Execute(h.ctx(), taskType, expectedSeconds); err != nil {
+	if _, err := h.defineStandard.Execute(h.ctx(), taskType, expectedSeconds, nil); err != nil {
 		h.t.Fatalf("seeding standard %s: %v", taskType, err)
 	}
 }

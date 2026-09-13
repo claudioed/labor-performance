@@ -70,7 +70,7 @@ func TestAnalyticsPublisherPublishesEachDomainEvent(t *testing.T) {
 	}{
 		{
 			name:          "LaborStandardDefined",
-			event:         shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9)),
+			event:         shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9)),
 			wantEventType: envelope.EventTypeLaborStandardDefined,
 			wantKey:       "PICK",
 			assertData: func(t *testing.T, data map[string]any) {
@@ -80,11 +80,28 @@ func TestAnalyticsPublisherPublishesEachDomainEvent(t *testing.T) {
 				if data["task_type"] != "PICK" {
 					t.Errorf("task_type = %v, want PICK", data["task_type"])
 				}
+				if _, present := data["travel_component_seconds"]; present {
+					t.Errorf("expected travel_component_seconds to be omitted when nil, got %v", data["travel_component_seconds"])
+				}
+			},
+		},
+		{
+			name: "LaborStandardDefined with a declared travel component",
+			event: func() shared.DomainEvent {
+				travel := int64(15)
+				return shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, &travel, at(9))
+			}(),
+			wantEventType: envelope.EventTypeLaborStandardDefined,
+			wantKey:       "PICK",
+			assertData: func(t *testing.T, data map[string]any) {
+				if data["travel_component_seconds"] != float64(15) {
+					t.Errorf("travel_component_seconds = %v, want 15", data["travel_component_seconds"])
+				}
 			},
 		},
 		{
 			name:          "LaborStandardRevised",
-			event:         shared.NewLaborStandardRevised(at(10), "std-2", shared.Pick, 45, 40, at(10)),
+			event:         shared.NewLaborStandardRevised(at(10), "std-2", shared.Pick, 45, 40, nil, at(10)),
 			wantEventType: envelope.EventTypeLaborStandardRevised,
 			wantKey:       "PICK",
 			assertData: func(t *testing.T, data map[string]any) {
@@ -93,6 +110,9 @@ func TestAnalyticsPublisherPublishesEachDomainEvent(t *testing.T) {
 				}
 				if data["expected_seconds"] != float64(40) {
 					t.Errorf("expected_seconds = %v, want 40", data["expected_seconds"])
+				}
+				if _, present := data["travel_component_seconds"]; present {
+					t.Errorf("expected travel_component_seconds to be omitted when nil, got %v", data["travel_component_seconds"])
 				}
 			},
 		},
@@ -188,8 +208,8 @@ func TestAnalyticsPublisherMintsAUniqueEventIdPerMessage(t *testing.T) {
 	// still differ, since event_id — not task id or task type — is the
 	// projection's dedup key.
 	err := p.Publish(context.Background(),
-		shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9)),
-		shared.NewLaborStandardRevised(at(10), "std-2", shared.Pick, 45, 40, at(10)),
+		shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9)),
+		shared.NewLaborStandardRevised(at(10), "std-2", shared.Pick, 45, 40, nil, at(10)),
 	)
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -220,7 +240,7 @@ func TestAnalyticsPublisherPropagatesWriteErrors(t *testing.T) {
 	w := &recordingWriter{failWith: errors.New("broker down")}
 	p := &AnalyticsPublisher{Writer: w, NewID: seqIDs()}
 
-	err := p.Publish(context.Background(), shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9)))
+	err := p.Publish(context.Background(), shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9)))
 	if err == nil {
 		t.Fatal("want the writer's error to surface")
 	}
@@ -229,7 +249,7 @@ func TestAnalyticsPublisherPropagatesWriteErrors(t *testing.T) {
 func TestAnalyticsPublisherInjectsTraceHeaders(t *testing.T) {
 	p, w := newTestPublisher()
 
-	if err := p.Publish(context.Background(), shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9))); err != nil {
+	if err := p.Publish(context.Background(), shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9))); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	// With no global propagator configured in a unit test the header
@@ -241,7 +261,7 @@ func TestAnalyticsPublisherInjectsTraceHeaders(t *testing.T) {
 }
 
 func TestFanOutPublisher(t *testing.T) {
-	event := shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9))
+	event := shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9))
 
 	t.Run("forwards to every publisher", func(t *testing.T) {
 		a, b := &countingPublisher{}, &countingPublisher{}

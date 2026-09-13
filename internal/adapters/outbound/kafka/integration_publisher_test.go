@@ -111,7 +111,7 @@ func TestIntegrationPublisherSkipsEventsOutsideTheContract(t *testing.T) {
 	// LaborStandardDefined is analytics-only, NOT part of the
 	// integration contract (ADR 0013 scopes the first cut to
 	// TaskPerformanceRecorded only).
-	if err := p.Publish(context.Background(), shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9))); err != nil {
+	if err := p.Publish(context.Background(), shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9))); err != nil {
 		t.Fatalf("an event outside the integration contract must be skipped, not an error: %v", err)
 	}
 	if len(w.msgs) != 0 {

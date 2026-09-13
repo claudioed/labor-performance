@@ -91,13 +91,13 @@ func (s *Server) handleDefineStandard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, err := s.DefineStandard.Execute(r.Context(), taskType, req.ExpectedSeconds)
+	st, err := s.DefineStandard.Execute(r.Context(), taskType, req.ExpectedSeconds, req.TravelComponentSeconds)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.EffectiveFrom(), st.EffectiveTo()))
+	writeJSON(w, http.StatusCreated, toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.TravelComponentSeconds(), st.EffectiveFrom(), st.EffectiveTo()))
 }
 
 func (s *Server) handleGetStandard(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +113,7 @@ func (s *Server) handleGetStandard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.EffectiveFrom(), st.EffectiveTo()))
+	writeJSON(w, http.StatusOK, toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.TravelComponentSeconds(), st.EffectiveFrom(), st.EffectiveTo()))
 }
 
 func (s *Server) handleGetAssociateScorecard(w http.ResponseWriter, r *http.Request) {
@@ -209,17 +209,18 @@ func toUtilizationResponse(result usecases.UtilizationResult) utilizationRespons
 
 const timeFormat = time.RFC3339
 
-func toStandardResponse(taskType shared.TaskType, expectedSeconds int64, effectiveFrom time.Time, effectiveTo *time.Time) standardResponse {
+func toStandardResponse(taskType shared.TaskType, expectedSeconds int64, travelComponentSeconds *int64, effectiveFrom time.Time, effectiveTo *time.Time) standardResponse {
 	var to *string
 	if effectiveTo != nil {
 		formatted := effectiveTo.UTC().Format(timeFormat)
 		to = &formatted
 	}
 	return standardResponse{
-		TaskType:        string(taskType),
-		ExpectedSeconds: expectedSeconds,
-		EffectiveFrom:   effectiveFrom.UTC().Format(timeFormat),
-		EffectiveTo:     to,
+		TaskType:               string(taskType),
+		ExpectedSeconds:        expectedSeconds,
+		TravelComponentSeconds: travelComponentSeconds,
+		EffectiveFrom:          effectiveFrom.UTC().Format(timeFormat),
+		EffectiveTo:            to,
 	}
 }
 

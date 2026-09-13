@@ -24,17 +24,17 @@ func NewStandardRepo(pool *pgxpool.Pool) *StandardRepo {
 
 func (r *StandardRepo) Save(ctx context.Context, s *standard.LaborStandard) error {
 	_, err := querierFrom(ctx, r.pool).Exec(ctx, `
-		INSERT INTO labor_standards (id, task_type, expected_seconds, effective_from, effective_to)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO labor_standards (id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (id) DO UPDATE
 		  SET effective_to = EXCLUDED.effective_to
-	`, string(s.ID()), string(s.TaskType()), s.ExpectedSeconds(), s.EffectiveFrom(), s.EffectiveTo())
+	`, string(s.ID()), string(s.TaskType()), s.ExpectedSeconds(), s.TravelComponentSeconds(), s.EffectiveFrom(), s.EffectiveTo())
 	return err
 }
 
 func (r *StandardRepo) FindActiveAsOf(ctx context.Context, taskType shared.TaskType, t time.Time) (*standard.LaborStandard, error) {
 	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
-		SELECT id, task_type, expected_seconds, effective_from, effective_to
+		SELECT id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to
 		FROM labor_standards
 		WHERE task_type = $1
 		  AND effective_from <= $2
@@ -45,7 +45,7 @@ func (r *StandardRepo) FindActiveAsOf(ctx context.Context, taskType shared.TaskT
 
 func (r *StandardRepo) FindCurrentlyActive(ctx context.Context, taskType shared.TaskType) (*standard.LaborStandard, error) {
 	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
-		SELECT id, task_type, expected_seconds, effective_from, effective_to
+		SELECT id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to
 		FROM labor_standards
 		WHERE task_type = $1 AND effective_to IS NULL
 	`, string(taskType))
@@ -54,20 +54,21 @@ func (r *StandardRepo) FindCurrentlyActive(ctx context.Context, taskType shared.
 
 func scanStandard(row pgx.Row) (*standard.LaborStandard, error) {
 	var (
-		id              string
-		taskType        string
-		expectedSeconds int64
-		effectiveFrom   time.Time
-		effectiveTo     *time.Time
+		id                     string
+		taskType               string
+		expectedSeconds        int64
+		travelComponentSeconds *int64
+		effectiveFrom          time.Time
+		effectiveTo            *time.Time
 	)
-	err := row.Scan(&id, &taskType, &expectedSeconds, &effectiveFrom, &effectiveTo)
+	err := row.Scan(&id, &taskType, &expectedSeconds, &travelComponentSeconds, &effectiveFrom, &effectiveTo)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return standard.Rehydrate(shared.StandardId(id), shared.TaskType(taskType), expectedSeconds, effectiveFrom, effectiveTo), nil
+	return standard.Rehydrate(shared.StandardId(id), shared.TaskType(taskType), expectedSeconds, travelComponentSeconds, effectiveFrom, effectiveTo), nil
 }
 
 // NextID mints a standard id.

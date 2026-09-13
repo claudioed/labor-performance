@@ -31,16 +31,22 @@ type LaborStandardDefined struct {
 	StandardId      StandardId
 	TaskType        TaskType
 	ExpectedSeconds int64
-	EffectiveFrom   time.Time
+	// TravelComponentSeconds is the optional travel-time breakdown of
+	// ExpectedSeconds this standard declared — nil when not declared
+	// (the common case). See standard.LaborStandard's own doc comment
+	// and ADR 0015.
+	TravelComponentSeconds *int64
+	EffectiveFrom          time.Time
 }
 
-func NewLaborStandardDefined(occurredAt time.Time, id StandardId, taskType TaskType, expectedSeconds int64, effectiveFrom time.Time) LaborStandardDefined {
+func NewLaborStandardDefined(occurredAt time.Time, id StandardId, taskType TaskType, expectedSeconds int64, travelComponentSeconds *int64, effectiveFrom time.Time) LaborStandardDefined {
 	return LaborStandardDefined{
-		base:            newBase("LaborStandardDefined", occurredAt),
-		StandardId:      id,
-		TaskType:        taskType,
-		ExpectedSeconds: expectedSeconds,
-		EffectiveFrom:   effectiveFrom,
+		base:                   newBase("LaborStandardDefined", occurredAt),
+		StandardId:             id,
+		TaskType:               taskType,
+		ExpectedSeconds:        expectedSeconds,
+		TravelComponentSeconds: travelComponentSeconds,
+		EffectiveFrom:          effectiveFrom,
 	}
 }
 
@@ -53,17 +59,24 @@ type LaborStandardRevised struct {
 	TaskType                TaskType
 	PreviousExpectedSeconds int64
 	NewExpectedSeconds      int64
-	EffectiveFrom           time.Time
+	// NewTravelComponentSeconds is the optional travel-time breakdown
+	// declared on the NEW (revised) standard — nil when not declared.
+	// The previous standard's own travel component, if any, is not
+	// carried on this event: it remains queryable on that closed
+	// LaborStandard row exactly as it was.
+	NewTravelComponentSeconds *int64
+	EffectiveFrom             time.Time
 }
 
-func NewLaborStandardRevised(occurredAt time.Time, id StandardId, taskType TaskType, previousExpectedSeconds, newExpectedSeconds int64, effectiveFrom time.Time) LaborStandardRevised {
+func NewLaborStandardRevised(occurredAt time.Time, id StandardId, taskType TaskType, previousExpectedSeconds, newExpectedSeconds int64, newTravelComponentSeconds *int64, effectiveFrom time.Time) LaborStandardRevised {
 	return LaborStandardRevised{
-		base:                    newBase("LaborStandardRevised", occurredAt),
-		StandardId:              id,
-		TaskType:                taskType,
-		PreviousExpectedSeconds: previousExpectedSeconds,
-		NewExpectedSeconds:      newExpectedSeconds,
-		EffectiveFrom:           effectiveFrom,
+		base:                      newBase("LaborStandardRevised", occurredAt),
+		StandardId:                id,
+		TaskType:                  taskType,
+		PreviousExpectedSeconds:   previousExpectedSeconds,
+		NewExpectedSeconds:        newExpectedSeconds,
+		NewTravelComponentSeconds: newTravelComponentSeconds,
+		EffectiveFrom:             effectiveFrom,
 	}
 }
 

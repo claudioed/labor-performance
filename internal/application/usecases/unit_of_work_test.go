@@ -115,7 +115,7 @@ func TestDefineStandard_FirstDefinition_SaveAndPublishRunInsideOneUnitOfWork(t *
 	uow := &recordingUnitOfWork{}
 	uc := &usecases.DefineStandard{Standards: standards, Events: pub, Clock: memory.FixedClock{At: baseTime}, UnitOfWork: uow}
 
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); err != nil {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if uow.opened != 1 || uow.committed != 1 || uow.rolledBack != 0 {
@@ -135,7 +135,7 @@ func TestDefineStandard_FirstDefinition_SaveAndPublishRunInsideOneUnitOfWork(t *
 func TestDefineStandard_Revision_BothSavesAndPublishRunInsideOneUnitOfWork(t *testing.T) {
 	standards := &scopedStandardRepo{StandardRepo: memory.NewStandardRepo()}
 	setup := &usecases.DefineStandard{Standards: standards, Events: &scopedPublisher{}, Clock: memory.FixedClock{At: baseTime}}
-	if _, err := setup.Execute(context.Background(), shared.Pick, 45); err != nil {
+	if _, err := setup.Execute(context.Background(), shared.Pick, 45, nil); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	standards.saveInScope = nil
@@ -143,7 +143,7 @@ func TestDefineStandard_Revision_BothSavesAndPublishRunInsideOneUnitOfWork(t *te
 	pub := &scopedPublisher{}
 	uow := &recordingUnitOfWork{}
 	uc := &usecases.DefineStandard{Standards: standards, Events: pub, Clock: memory.FixedClock{At: baseTime.Add(time.Hour)}, UnitOfWork: uow}
-	if _, err := uc.Execute(context.Background(), shared.Pick, 40); err != nil {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 40, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if uow.opened != 1 || uow.committed != 1 {
@@ -167,7 +167,7 @@ func TestDefineStandard_PublishFailure_RollsBackTheUnitOfWork(t *testing.T) {
 	metrics := &fakeStandardMetrics{}
 	uc := &usecases.DefineStandard{Standards: memory.NewStandardRepo(), Events: pub, Clock: memory.FixedClock{At: baseTime}, UnitOfWork: uow, Metrics: metrics}
 
-	_, err := uc.Execute(context.Background(), shared.Pick, 45)
+	_, err := uc.Execute(context.Background(), shared.Pick, 45, nil)
 	if err == nil || err.Error() != "outbox insert failed" {
 		t.Fatalf("expected the publish error to propagate, got %v", err)
 	}
@@ -184,7 +184,7 @@ func TestDefineStandard_UnitOfWorkBeginFailure_Propagates(t *testing.T) {
 	uow := &recordingUnitOfWork{beginErr: errors.New("begin failed")}
 	uc := &usecases.DefineStandard{Standards: memory.NewStandardRepo(), Events: pub, Clock: memory.FixedClock{At: baseTime}, UnitOfWork: uow}
 
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); err == nil || err.Error() != "begin failed" {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); err == nil || err.Error() != "begin failed" {
 		t.Fatalf("expected begin error, got %v", err)
 	}
 	if len(pub.events) != 0 {
@@ -196,7 +196,7 @@ func TestDefineStandard_RejectedInput_OpensNoUnitOfWork(t *testing.T) {
 	uow := &recordingUnitOfWork{}
 	uc := &usecases.DefineStandard{Standards: memory.NewStandardRepo(), Events: &scopedPublisher{}, Clock: memory.FixedClock{At: baseTime}, UnitOfWork: uow}
 
-	if _, err := uc.Execute(context.Background(), shared.Pick, 0); err == nil {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 0, nil); err == nil {
 		t.Fatal("expected a non-positive ExpectedSeconds to be rejected")
 	}
 	if uow.opened != 0 {
@@ -208,7 +208,7 @@ func TestDefineStandard_NilUnitOfWork_StillSavesAndPublishes(t *testing.T) {
 	pub := &scopedPublisher{}
 	uc := &usecases.DefineStandard{Standards: memory.NewStandardRepo(), Events: pub, Clock: memory.FixedClock{At: baseTime}}
 
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); err != nil {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(pub.events) != 1 || pub.inScope[0] {
