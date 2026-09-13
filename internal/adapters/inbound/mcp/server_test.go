@@ -31,7 +31,7 @@ func newServer(t *testing.T) string {
 	defineStandard := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock}
 	recordTaskPerformance := &usecases.RecordTaskPerformance{Performances: performances, Standards: standards, Processed: processed, Events: publisher, Clock: clock}
 
-	if _, err := defineStandard.Execute(ctx, shared.Pick, 60); err != nil {
+	if _, err := defineStandard.Execute(ctx, shared.Pick, 60, nil); err != nil {
 		t.Fatalf("seed standard: %v", err)
 	}
 	if _, err := recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{

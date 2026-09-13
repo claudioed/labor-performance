@@ -11,7 +11,7 @@ import (
 
 func mustNew(t *testing.T, taskType shared.TaskType, expectedSeconds int64, effectiveFrom time.Time) *standard.LaborStandard {
 	t.Helper()
-	s, err := standard.New("std-1", taskType, expectedSeconds, effectiveFrom)
+	s, err := standard.New("std-1", taskType, expectedSeconds, nil, effectiveFrom)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestNew_Success(t *testing.T) {
 func TestNew_FailingPath_NonPositiveExpectedSeconds(t *testing.T) {
 	from := time.Now()
 	for _, seconds := range []int64{0, -1, -100} {
-		if _, err := standard.New("std-1", shared.Pick, seconds, from); !errors.Is(err, standard.ErrNonPositiveExpectedSeconds) {
+		if _, err := standard.New("std-1", shared.Pick, seconds, nil, from); !errors.Is(err, standard.ErrNonPositiveExpectedSeconds) {
 			t.Fatalf("New(%d) error = %v, want ErrNonPositiveExpectedSeconds", seconds, err)
 		}
 	}
@@ -84,7 +84,7 @@ func TestIsActiveAt(t *testing.T) {
 	})
 
 	t.Run("closed standard", func(t *testing.T) {
-		s := standard.Rehydrate("std-1", shared.Pick, 45, from, &to)
+		s := standard.Rehydrate("std-1", shared.Pick, 45, nil, from, &to)
 		if !s.IsActiveAt(from) {
 			t.Fatal("must be active at EffectiveFrom")
 		}
@@ -102,9 +102,58 @@ func TestIsActiveAt(t *testing.T) {
 
 func TestRehydrate_RoundTrip(t *testing.T) {
 	from := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
-	s := standard.Rehydrate("std-42", shared.Slam, 60, from, nil)
+	s := standard.Rehydrate("std-42", shared.Slam, 60, nil, from, nil)
 
 	if s.ID() != "std-42" || s.TaskType() != shared.Slam || s.ExpectedSeconds() != 60 {
 		t.Fatalf("unexpected rehydrated standard: %+v", s)
+	}
+}
+
+func TestNew_TravelComponentSeconds_Nil_IsAlwaysValid(t *testing.T) {
+	from := time.Now()
+	s, err := standard.New("std-1", shared.Pick, 45, nil, from)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.TravelComponentSeconds() != nil {
+		t.Fatalf("want nil TravelComponentSeconds by default, got %v", *s.TravelComponentSeconds())
+	}
+}
+
+func TestNew_TravelComponentSeconds_ValidRange(t *testing.T) {
+	from := time.Now()
+	for _, seconds := range []int64{0, 20, 45} {
+		s, err := standard.New("std-1", shared.Pick, 45, &seconds, from)
+		if err != nil {
+			t.Fatalf("New(travelComponentSeconds=%d): unexpected error: %v", seconds, err)
+		}
+		if s.TravelComponentSeconds() == nil || *s.TravelComponentSeconds() != seconds {
+			t.Fatalf("want TravelComponentSeconds=%d, got %v", seconds, s.TravelComponentSeconds())
+		}
+	}
+}
+
+func TestNew_RejectsNegativeTravelComponentSeconds(t *testing.T) {
+	from := time.Now()
+	negative := int64(-1)
+	if _, err := standard.New("std-1", shared.Pick, 45, &negative, from); !errors.Is(err, standard.ErrNegativeTravelComponentSeconds) {
+		t.Fatalf("want ErrNegativeTravelComponentSeconds, got %v", err)
+	}
+}
+
+func TestNew_RejectsTravelComponentSecondsExceedingExpectedSeconds(t *testing.T) {
+	from := time.Now()
+	tooMuch := int64(46)
+	if _, err := standard.New("std-1", shared.Pick, 45, &tooMuch, from); !errors.Is(err, standard.ErrTravelComponentExceedsExpectedSeconds) {
+		t.Fatalf("want ErrTravelComponentExceedsExpectedSeconds, got %v", err)
+	}
+}
+
+func TestRehydrate_PreservesTravelComponentSeconds(t *testing.T) {
+	from := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
+	travel := int64(15)
+	s := standard.Rehydrate("std-1", shared.Pick, 45, &travel, from, nil)
+	if s.TravelComponentSeconds() == nil || *s.TravelComponentSeconds() != 15 {
+		t.Fatalf("want rehydrated TravelComponentSeconds=15, got %v", s.TravelComponentSeconds())
 	}
 }

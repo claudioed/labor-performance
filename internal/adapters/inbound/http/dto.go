@@ -7,15 +7,27 @@ package http
 type defineStandardRequest struct {
 	TaskType        string `json:"taskType"`
 	ExpectedSeconds int64  `json:"expectedSeconds"`
+	// TravelComponentSeconds is an OPTIONAL declaration of how much of
+	// ExpectedSeconds is attributable to travel between locations for
+	// this TaskType. This service never computes it itself — it is
+	// supplied by the caller, grounded in a real distance estimate
+	// performed elsewhere (e.g. facility-layout's
+	// estimate_travel_distance), since this service has no REST
+	// dependency in either direction with any sibling context (ADR
+	// 0015). Omitted entirely means "not broken out", the default.
+	TravelComponentSeconds *int64 `json:"travelComponentSeconds,omitempty"`
 }
 
 // standardResponse is the response body for DefineStandard and
 // GetStandard.
 type standardResponse struct {
-	TaskType        string  `json:"taskType"`
-	ExpectedSeconds int64   `json:"expectedSeconds"`
-	EffectiveFrom   string  `json:"effectiveFrom"`
-	EffectiveTo     *string `json:"effectiveTo,omitempty"`
+	TaskType        string `json:"taskType"`
+	ExpectedSeconds int64  `json:"expectedSeconds"`
+	// TravelComponentSeconds is omitted entirely (not defaulted to 0)
+	// when this standard never declared one.
+	TravelComponentSeconds *int64  `json:"travelComponentSeconds,omitempty"`
+	EffectiveFrom          string  `json:"effectiveFrom"`
+	EffectiveTo            *string `json:"effectiveTo,omitempty"`
 }
 
 // taskTypeBreakdownResponse is one TaskType's slice of a

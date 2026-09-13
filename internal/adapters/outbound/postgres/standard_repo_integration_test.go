@@ -97,7 +97,7 @@ func TestPostgres_StandardRoundTrip(t *testing.T) {
 
 func mustStandard(t *testing.T, id shared.StandardId, taskType shared.TaskType, expectedSeconds int64, effectiveFrom time.Time) *standard.LaborStandard {
 	t.Helper()
-	s, err := standard.New(id, taskType, expectedSeconds, effectiveFrom)
+	s, err := standard.New(id, taskType, expectedSeconds, nil, effectiveFrom)
 	if err != nil {
 		t.Fatalf("unexpected error building standard: %v", err)
 	}

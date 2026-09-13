@@ -72,6 +72,7 @@ Typos, broken links and formatting are of course fair game.
 | [0012](./0012-remove-rest-auth-layer.md) | Remove the REST/MCP identity layer | Accepted |
 | [0013](./0013-labor-performance-integration-events.md) | Labor performance publishes an integration event | Accepted |
 | [0014](./0014-labor-utilization-idleness.md) | Measuring idleness and utilization | Accepted |
+| [0015](./0015-optional-travel-component-on-labor-standard.md) | Optional travel-time component on a LaborStandard | Accepted |
 
 Each of these reconstructs a decision that is actually visible in this
 repository's history, `CLAUDE.md` or code — none is a generic placeholder.

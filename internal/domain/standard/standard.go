@@ -19,41 +19,74 @@ import (
 // should take zero or negative seconds is not a business fact.
 var ErrNonPositiveExpectedSeconds = errors.New("expected seconds must be greater than zero")
 
+// ErrNegativeTravelComponentSeconds is returned when a non-nil
+// TravelComponentSeconds is negative — a negative travel allowance is
+// not a business fact.
+var ErrNegativeTravelComponentSeconds = errors.New("travel component seconds must not be negative")
+
+// ErrTravelComponentExceedsExpectedSeconds is returned when a non-nil
+// TravelComponentSeconds is greater than ExpectedSeconds — the travel
+// portion of a standard can be as large as the WHOLE standard (a task
+// type that is effectively all travel, e.g. a water-spider replenishment
+// run) but can never exceed it.
+var ErrTravelComponentExceedsExpectedSeconds = errors.New("travel component seconds must not exceed expected seconds")
+
 // LaborStandard is the aggregate root for "how long a task TYPE should
 // take". EffectiveTo is nil while the standard is the currently active one
 // for its TaskType; Close sets it once a revision supersedes this record.
+//
+// TravelComponentSeconds is an OPTIONAL breakdown of how much of
+// ExpectedSeconds is attributable to travel between locations for this
+// TaskType — nil means "not broken out" (the default, and the only state
+// that existed before this field). This service never computes it: it is
+// supplied by the caller, grounded in a real distance estimate performed
+// elsewhere (e.g. an operator or tooling using facility-layout's
+// estimate_travel_distance endpoint). This service has no REST dependency
+// in either direction with any sibling context (see AGENTS.md's
+// non-negotiables and the domain-model rule's "v1 scope decisions still
+// in force") — it never resolves or validates this value against a live
+// distance lookup itself. See ADR 0015.
 type LaborStandard struct {
-	id              shared.StandardId
-	taskType        shared.TaskType
-	expectedSeconds int64
-	effectiveFrom   time.Time
-	effectiveTo     *time.Time
+	id                     shared.StandardId
+	taskType               shared.TaskType
+	expectedSeconds        int64
+	travelComponentSeconds *int64
+	effectiveFrom          time.Time
+	effectiveTo            *time.Time
 }
 
 // New constructs a LaborStandard, freshly active (EffectiveTo nil) from
 // effectiveFrom onward. Returns ErrNonPositiveExpectedSeconds if
-// expectedSeconds <= 0.
-func New(id shared.StandardId, taskType shared.TaskType, expectedSeconds int64, effectiveFrom time.Time) (*LaborStandard, error) {
+// expectedSeconds <= 0. travelComponentSeconds is optional (nil means "not
+// broken out"); when non-nil it must be in [0, expectedSeconds] —
+// ErrNegativeTravelComponentSeconds or
+// ErrTravelComponentExceedsExpectedSeconds otherwise.
+func New(id shared.StandardId, taskType shared.TaskType, expectedSeconds int64, travelComponentSeconds *int64, effectiveFrom time.Time) (*LaborStandard, error) {
 	if expectedSeconds <= 0 {
 		return nil, ErrNonPositiveExpectedSeconds
 	}
+	if err := validateTravelComponentSeconds(travelComponentSeconds, expectedSeconds); err != nil {
+		return nil, err
+	}
 	return &LaborStandard{
-		id:              id,
-		taskType:        taskType,
-		expectedSeconds: expectedSeconds,
-		effectiveFrom:   effectiveFrom,
+		id:                     id,
+		taskType:               taskType,
+		expectedSeconds:        expectedSeconds,
+		travelComponentSeconds: travelComponentSeconds,
+		effectiveFrom:          effectiveFrom,
 	}, nil
 }
 
 // Rehydrate reconstructs a LaborStandard from persisted state without
 // re-validating construction invariants (used by repository adapters).
-func Rehydrate(id shared.StandardId, taskType shared.TaskType, expectedSeconds int64, effectiveFrom time.Time, effectiveTo *time.Time) *LaborStandard {
+func Rehydrate(id shared.StandardId, taskType shared.TaskType, expectedSeconds int64, travelComponentSeconds *int64, effectiveFrom time.Time, effectiveTo *time.Time) *LaborStandard {
 	return &LaborStandard{
-		id:              id,
-		taskType:        taskType,
-		expectedSeconds: expectedSeconds,
-		effectiveFrom:   effectiveFrom,
-		effectiveTo:     effectiveTo,
+		id:                     id,
+		taskType:               taskType,
+		expectedSeconds:        expectedSeconds,
+		travelComponentSeconds: travelComponentSeconds,
+		effectiveFrom:          effectiveFrom,
+		effectiveTo:            effectiveTo,
 	}
 }
 
@@ -81,5 +114,25 @@ func (s *LaborStandard) IsActiveAt(t time.Time) bool {
 func (s *LaborStandard) ID() shared.StandardId     { return s.id }
 func (s *LaborStandard) TaskType() shared.TaskType { return s.taskType }
 func (s *LaborStandard) ExpectedSeconds() int64    { return s.expectedSeconds }
-func (s *LaborStandard) EffectiveFrom() time.Time  { return s.effectiveFrom }
-func (s *LaborStandard) EffectiveTo() *time.Time   { return s.effectiveTo }
+
+// TravelComponentSeconds is the optional travel-time breakdown of
+// ExpectedSeconds — nil when not declared for this standard.
+func (s *LaborStandard) TravelComponentSeconds() *int64 { return s.travelComponentSeconds }
+func (s *LaborStandard) EffectiveFrom() time.Time       { return s.effectiveFrom }
+func (s *LaborStandard) EffectiveTo() *time.Time        { return s.effectiveTo }
+
+// validateTravelComponentSeconds enforces the one invariant on the
+// optional travel breakdown: nil is always valid ("not declared"); a
+// non-nil value must be in [0, expectedSeconds].
+func validateTravelComponentSeconds(travelComponentSeconds *int64, expectedSeconds int64) error {
+	if travelComponentSeconds == nil {
+		return nil
+	}
+	if *travelComponentSeconds < 0 {
+		return ErrNegativeTravelComponentSeconds
+	}
+	if *travelComponentSeconds > expectedSeconds {
+		return ErrTravelComponentExceedsExpectedSeconds
+	}
+	return nil
+}

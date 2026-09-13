@@ -49,6 +49,7 @@ const sidebars: SidebarsConfig = {
         'adr/0012-remove-rest-auth-layer',
         'adr/0013-labor-performance-integration-events',
         'adr/0014-labor-utilization-idleness',
+        'adr/0015-optional-travel-component-on-labor-standard',
       ],
     },
   ],

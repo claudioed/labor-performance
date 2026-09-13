@@ -22,7 +22,9 @@ func statusFor(err error) int {
 		errors.Is(err, performance.ErrEmptyTaskId):
 		return http.StatusBadRequest
 
-	case errors.Is(err, standard.ErrNonPositiveExpectedSeconds):
+	case errors.Is(err, standard.ErrNonPositiveExpectedSeconds),
+		errors.Is(err, standard.ErrNegativeTravelComponentSeconds),
+		errors.Is(err, standard.ErrTravelComponentExceedsExpectedSeconds):
 		return http.StatusUnprocessableEntity
 
 	default:
@@ -63,6 +65,10 @@ func problemFor(err error) problemInfo {
 
 	case errors.Is(err, standard.ErrNonPositiveExpectedSeconds):
 		return problemInfo{"non-positive-expected-seconds", "Expected seconds must be greater than zero"}
+	case errors.Is(err, standard.ErrNegativeTravelComponentSeconds):
+		return problemInfo{"negative-travel-component-seconds", "Travel component seconds must not be negative"}
+	case errors.Is(err, standard.ErrTravelComponentExceedsExpectedSeconds):
+		return problemInfo{"travel-component-exceeds-expected-seconds", "Travel component seconds must not exceed expected seconds"}
 
 	default:
 		return problemInfo{"internal-error", "An unexpected internal error occurred"}
