@@ -109,7 +109,7 @@ go run ./cmd/labor                            # migrations run automatically
 
 # Quality gate (mirrors .github/workflows/ci.yml)
 make check       # fmt-check + vet + build + lint + test -race
-make check-all   # check + coverage (gate: 90% on domain+application+analytics)
+make check-all   # check + coverage (gate: 90%) + arch-test + bdd
 
 # Individual verification surfaces
 go test ./... -run TestFeatures -v                    # BDD (godog/Gherkin)
