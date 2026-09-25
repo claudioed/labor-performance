@@ -1,6 +1,50 @@
-/** Local-dev base URL for labor-performance's own REST API. Mirrors
- *  e2e-tests/env.sh's port-offset convention (each service's own :8080
- *  default, offset by index -- FACILITY=8081, INVENTORY=8082, WES=8083,
- *  FULFILLMENT=8084, WORKFORCE=8085, ORDER=8086, PROCESS_PATH=8087,
- *  LABOR=8088). */
-export const LABOR_API_BASE = "http://localhost:8088";
+/**
+ * Runtime endpoint resolution for labor_mfe.
+ *
+ * This remote is deployed as one image that must work in more than one
+ * environment, so the API location cannot be a build-time constant. The
+ * console shell publishes `window.__WAREHOUSE_CONFIG__` from a runtime
+ * /config.json before any remote mounts; this module turns that origin into
+ * this context's own API base.
+ *
+ * The fleet's localhost topology puts APIs on a DIFFERENT origin from the
+ * frontend (Kong on :8000, Nginx on :80), so this is a real cross-origin URL
+ * rather than a same-origin path -- Kong carries the matching CORS policy.
+ *
+ * In a production build a missing/malformed origin throws rather than falling
+ * back to a developer port: a silent fallback would mean a deployed console
+ * quietly talking to nothing.
+ */
+export interface WarehouseRuntimeConfig {
+  apiOrigin?: string;
+}
+
+declare global {
+  interface Window {
+    __WAREHOUSE_CONFIG__?: WarehouseRuntimeConfig;
+  }
+}
+
+const API_PATH = "/api/labor-performance";
+const DEV_API_BASE = "http://localhost:8088";
+
+export function resolveLaborApiBase(
+  runtimeConfig: WarehouseRuntimeConfig,
+  isProduction: boolean,
+): string {
+  const apiOrigin = runtimeConfig.apiOrigin?.replace(/\/+$/, "");
+  if (!apiOrigin) {
+    if (isProduction) {
+      throw new Error(
+        "window.__WAREHOUSE_CONFIG__.apiOrigin is required in production",
+      );
+    }
+    return DEV_API_BASE;
+  }
+  return `${apiOrigin}${API_PATH}`;
+}
+
+export const LABOR_API_BASE = resolveLaborApiBase(
+  typeof window === "undefined" ? {} : (window.__WAREHOUSE_CONFIG__ ?? {}),
+  import.meta.env.PROD,
+);

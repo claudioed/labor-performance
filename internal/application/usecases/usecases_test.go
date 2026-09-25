@@ -21,6 +21,7 @@ type fixture struct {
 	standards    *memory.StandardRepo
 	performances *memory.PerformanceRepo
 	processed    *memory.ProcessedEventRepo
+	idlePeriods  *memory.IdlePeriodRepo
 	clock        memory.FixedClock
 
 	defineStandard         *usecases.DefineStandard
@@ -28,12 +29,14 @@ type fixture struct {
 	recordTaskPerformance  *usecases.RecordTaskPerformance
 	getAssociateScorecard  *usecases.GetAssociateScorecard
 	getTaskTypePerformance *usecases.GetTaskTypePerformance
+	getUtilization         *usecases.GetUtilization
 }
 
 func newFixture(now time.Time) *fixture {
 	standards := memory.NewStandardRepo()
 	performances := memory.NewPerformanceRepo()
 	processed := memory.NewProcessedEventRepo()
+	idlePeriods := memory.NewIdlePeriodRepo()
 	publisher := events.NewLogPublisher(nil)
 	clock := memory.FixedClock{At: now}
 
@@ -41,15 +44,18 @@ func newFixture(now time.Time) *fixture {
 		standards:    standards,
 		performances: performances,
 		processed:    processed,
+		idlePeriods:  idlePeriods,
 		clock:        clock,
 
 		defineStandard: &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock},
 		getStandard:    &usecases.GetStandard{Standards: standards},
 		recordTaskPerformance: &usecases.RecordTaskPerformance{
 			Performances: performances, Standards: standards, Processed: processed, Events: publisher, Clock: clock,
+			IdlePeriods: idlePeriods,
 		},
 		getAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
 		getTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: performances},
+		getUtilization:         &usecases.GetUtilization{Performances: performances, IdlePeriods: idlePeriods, Clock: clock},
 	}
 }
 
@@ -58,7 +64,7 @@ var baseTime = time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
 func TestDefineStandard_Success_FirstDefinition(t *testing.T) {
 	f := newFixture(baseTime)
 
-	s, err := f.defineStandard.Execute(context.Background(), shared.Pick, 45)
+	s, err := f.defineStandard.Execute(context.Background(), shared.Pick, 45, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -72,7 +78,7 @@ func TestDefineStandard_Success_FirstDefinition(t *testing.T) {
 
 func TestDefineStandard_FailingPath_NonPositiveExpectedSeconds(t *testing.T) {
 	f := newFixture(baseTime)
-	_, err := f.defineStandard.Execute(context.Background(), shared.Pick, 0)
+	_, err := f.defineStandard.Execute(context.Background(), shared.Pick, 0, nil)
 	if !errors.Is(err, standard.ErrNonPositiveExpectedSeconds) {
 		t.Fatalf("error = %v, want ErrNonPositiveExpectedSeconds", err)
 	}
@@ -90,7 +96,7 @@ func TestDefineStandard_RecordsMetrics_OnAcceptedDefinition(t *testing.T) {
 	metrics := &fakeStandardMetrics{}
 
 	uc := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, Metrics: metrics}
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); err != nil {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
@@ -113,12 +119,12 @@ func TestDefineStandard_RecordsMetrics_OnRevision(t *testing.T) {
 	ctx := context.Background()
 
 	uc1 := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: memory.FixedClock{At: baseTime}, Metrics: metrics}
-	if _, err := uc1.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := uc1.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("first Execute: %v", err)
 	}
 
 	uc2 := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: memory.FixedClock{At: baseTime.Add(24 * time.Hour)}, Metrics: metrics}
-	if _, err := uc2.Execute(ctx, shared.Pick, 50); err != nil {
+	if _, err := uc2.Execute(ctx, shared.Pick, 50, nil); err != nil {
 		t.Fatalf("second Execute: %v", err)
 	}
 
@@ -140,7 +146,7 @@ func TestDefineStandard_RecordsMetrics_OnRejectedDefinition(t *testing.T) {
 	metrics := &fakeStandardMetrics{}
 
 	uc := &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, Metrics: metrics}
-	_, err := uc.Execute(context.Background(), shared.Pick, 0)
+	_, err := uc.Execute(context.Background(), shared.Pick, 0, nil)
 	if !errors.Is(err, standard.ErrNonPositiveExpectedSeconds) {
 		t.Fatalf("error = %v, want ErrNonPositiveExpectedSeconds", err)
 	}
@@ -158,7 +164,7 @@ func TestDefineStandard_RecordsMetrics_OnRejectedDefinition(t *testing.T) {
 // ports.StandardMetrics.
 func TestDefineStandard_NilMetrics_DoesNotPanic(t *testing.T) {
 	f := newFixture(baseTime)
-	if _, err := f.defineStandard.Execute(context.Background(), shared.Pick, 45); err != nil {
+	if _, err := f.defineStandard.Execute(context.Background(), shared.Pick, 45, nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 }
@@ -171,14 +177,14 @@ func TestDefineStandard_Revision(t *testing.T) {
 	f := newFixture(baseTime)
 	ctx := context.Background()
 
-	first, err := f.defineStandard.Execute(ctx, shared.Pick, 45)
+	first, err := f.defineStandard.Execute(ctx, shared.Pick, 45, nil)
 	if err != nil {
 		t.Fatalf("first Execute: %v", err)
 	}
 
 	revisedAt := baseTime.Add(24 * time.Hour)
 	f2 := newFixtureAt(f, revisedAt)
-	second, err := f2.defineStandard.Execute(ctx, shared.Pick, 50)
+	second, err := f2.defineStandard.Execute(ctx, shared.Pick, 50, nil)
 	if err != nil {
 		t.Fatalf("second Execute: %v", err)
 	}
@@ -232,20 +238,22 @@ func TestDefineStandard_Revision(t *testing.T) {
 func newFixtureAt(f *fixture, at time.Time) *fixture {
 	clock := memory.FixedClock{At: at}
 	return &fixture{
-		standards: f.standards, performances: f.performances, processed: f.processed, clock: clock,
+		standards: f.standards, performances: f.performances, processed: f.processed, idlePeriods: f.idlePeriods, clock: clock,
 		defineStandard: &usecases.DefineStandard{Standards: f.standards, Events: events.NewLogPublisher(nil), Clock: clock},
 		getStandard:    &usecases.GetStandard{Standards: f.standards},
 		recordTaskPerformance: &usecases.RecordTaskPerformance{
 			Performances: f.performances, Standards: f.standards, Processed: f.processed, Events: events.NewLogPublisher(nil), Clock: clock,
+			IdlePeriods: f.idlePeriods,
 		},
 		getAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: f.performances},
 		getTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: f.performances},
+		getUtilization:         &usecases.GetUtilization{Performances: f.performances, IdlePeriods: f.idlePeriods, Clock: clock},
 	}
 }
 
 func TestGetStandard_Success(t *testing.T) {
 	f := newFixture(baseTime)
-	if _, err := f.defineStandard.Execute(context.Background(), shared.Pack, 60); err != nil {
+	if _, err := f.defineStandard.Execute(context.Background(), shared.Pack, 60, nil); err != nil {
 		t.Fatalf("DefineStandard: %v", err)
 	}
 
@@ -269,7 +277,7 @@ func TestGetStandard_FailingPath_NotFound(t *testing.T) {
 func TestRecordTaskPerformance_Success_WithActiveStandard(t *testing.T) {
 	f := newFixture(baseTime)
 	ctx := context.Background()
-	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("DefineStandard: %v", err)
 	}
 
@@ -313,7 +321,7 @@ func TestRecordTaskPerformance_NoActiveStandard(t *testing.T) {
 func TestRecordTaskPerformance_ZeroDurationSeconds(t *testing.T) {
 	f := newFixture(baseTime)
 	ctx := context.Background()
-	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("DefineStandard: %v", err)
 	}
 
@@ -516,7 +524,7 @@ func TestGetTaskTypePerformance_MeanActualSeconds_ExcludesUnmeasurableRows(t *te
 func TestGetAssociateScorecard_Trend_InsufficientDataBelowThreeScoredTasks(t *testing.T) {
 	f := newFixture(baseTime)
 	ctx := context.Background()
-	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("DefineStandard: %v", err)
 	}
 	for i := range 2 {
@@ -548,7 +556,7 @@ func TestGetAssociateScorecard_Trend_InsufficientDataBelowThreeScoredTasks(t *te
 func TestGetAssociateScorecard_CoachingFlag_ThreeConsecutiveBelowFloor(t *testing.T) {
 	f := newFixture(baseTime)
 	ctx := context.Background()
-	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 100); err != nil {
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 100, nil); err != nil {
 		t.Fatalf("DefineStandard: %v", err)
 	}
 
@@ -579,7 +587,7 @@ func TestGetAssociateScorecard_CoachingFlag_ThreeConsecutiveBelowFloor(t *testin
 func TestGetAssociateScorecard_CoachingFlag_RecentGoodTaskClearsFlag(t *testing.T) {
 	f := newFixture(baseTime)
 	ctx := context.Background()
-	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 100); err != nil {
+	if _, err := f.defineStandard.Execute(ctx, shared.Pick, 100, nil); err != nil {
 		t.Fatalf("DefineStandard: %v", err)
 	}
 
@@ -636,7 +644,7 @@ func TestDefineStandard_PropagatesFindCurrentlyActiveError(t *testing.T) {
 	f := newFixture(baseTime)
 	wrapped := &failingStandardRepo{StandardRepo: f.standards, failFindCurrent: true}
 	uc := &usecases.DefineStandard{Standards: wrapped, Events: events.NewLogPublisher(nil), Clock: f.clock}
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); !errors.Is(err, errUnmapped) {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); !errors.Is(err, errUnmapped) {
 		t.Fatalf("error = %v, want errUnmapped", err)
 	}
 }
@@ -645,7 +653,7 @@ func TestDefineStandard_PropagatesNextIDError(t *testing.T) {
 	f := newFixture(baseTime)
 	wrapped := &failingStandardRepo{StandardRepo: f.standards, failNextID: true}
 	uc := &usecases.DefineStandard{Standards: wrapped, Events: events.NewLogPublisher(nil), Clock: f.clock}
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); !errors.Is(err, errUnmapped) {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); !errors.Is(err, errUnmapped) {
 		t.Fatalf("error = %v, want errUnmapped", err)
 	}
 }
@@ -654,7 +662,7 @@ func TestDefineStandard_PropagatesSaveError(t *testing.T) {
 	f := newFixture(baseTime)
 	wrapped := &failingStandardRepo{StandardRepo: f.standards, failSave: true}
 	uc := &usecases.DefineStandard{Standards: wrapped, Events: events.NewLogPublisher(nil), Clock: f.clock}
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); !errors.Is(err, errUnmapped) {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); !errors.Is(err, errUnmapped) {
 		t.Fatalf("error = %v, want errUnmapped", err)
 	}
 }
@@ -662,7 +670,7 @@ func TestDefineStandard_PropagatesSaveError(t *testing.T) {
 func TestDefineStandard_PropagatesPublishError(t *testing.T) {
 	f := newFixture(baseTime)
 	uc := &usecases.DefineStandard{Standards: f.standards, Events: &failingPublisher{fail: true}, Clock: f.clock}
-	if _, err := uc.Execute(context.Background(), shared.Pick, 45); !errors.Is(err, errUnmapped) {
+	if _, err := uc.Execute(context.Background(), shared.Pick, 45, nil); !errors.Is(err, errUnmapped) {
 		t.Fatalf("error = %v, want errUnmapped", err)
 	}
 }
@@ -731,5 +739,418 @@ func TestRecordTaskPerformance_PropagatesConstructionError(t *testing.T) {
 	})
 	if !errors.Is(err, performance.ErrEmptyTaskId) {
 		t.Fatalf("error = %v, want ErrEmptyTaskId", err)
+	}
+}
+
+// --- Idle-gap derivation (RecordTaskPerformance) ---------------------------
+
+// TestRecordTaskPerformance_IdleGap_FirstObservation_NoGapRecorded covers
+// the idleness ADR's "First-observation gap" limitation: an associate's
+// first-ever completion has no prior completion to measure a gap from,
+// so IdleSecondsBefore must be nil, never a fabricated "infinite" value.
+func TestRecordTaskPerformance_IdleGap_FirstObservation_NoGapRecorded(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+
+	p, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 50, CompletedAt: baseTime,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected a recorded performance")
+	}
+
+	idleSeconds, count, err := f.idlePeriods.SumByAssociate(ctx, "assoc-1", baseTime.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("SumByAssociate: %v", err)
+	}
+	if count != 0 || idleSeconds != 0 {
+		t.Fatalf("expected no idle period recorded for a first observation, got count=%d idleSeconds=%d", count, idleSeconds)
+	}
+}
+
+// TestRecordTaskPerformance_IdleGap_RecordedOnSecondCompletion proves the
+// happy path end to end: two completions for one associate with a real
+// gap between them derive and persist an IdlePeriod, and the published
+// event's IdleSecondsBefore matches the recorded gap seconds.
+func TestRecordTaskPerformance_IdleGap_RecordedOnSecondCompletion(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+
+	// First task: claimed at baseTime, took 40s, completed at
+	// baseTime+40s.
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime.Add(40 * time.Second),
+	}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+
+	// Second task: claimed 100s after the first completion (idle gap =
+	// 100s), took 30s, completed 130s after the first completion.
+	firstCompletedAt := baseTime.Add(40 * time.Second)
+	secondClaimedAt := firstCompletedAt.Add(100 * time.Second)
+	secondCompletedAt := secondClaimedAt.Add(30 * time.Second)
+
+	p, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 30, CompletedAt: secondCompletedAt,
+	})
+	if err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected a recorded performance")
+	}
+
+	idleSeconds, count, err := f.idlePeriods.SumByAssociate(ctx, "assoc-1", baseTime.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("SumByAssociate: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+	if idleSeconds != 100 {
+		t.Fatalf("idleSeconds = %d, want 100", idleSeconds)
+	}
+}
+
+// TestRecordTaskPerformance_IdleGap_NegativeGapSkippedNotFailed proves
+// the idleness ADR's "Kafka reordering makes negative gaps ROUTINE"
+// discipline: a claim instant landing at or before the previous
+// completion must skip idle-gap recording and log, WITHOUT failing the
+// enclosing performance write.
+func TestRecordTaskPerformance_IdleGap_NegativeGapSkippedNotFailed(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+
+	// A "next" task whose derived claim instant (completedAt -
+	// actualSeconds) lands BEFORE the first completion — out-of-order
+	// Kafka delivery.
+	p, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 7200, CompletedAt: baseTime.Add(time.Hour).Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("second Execute must NOT fail on a negative idle gap: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected the performance write to still succeed")
+	}
+
+	_, count, err := f.idlePeriods.SumByAssociate(ctx, "assoc-1", baseTime.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("SumByAssociate: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("count = %d, want 0 (a negative gap must be skipped, not recorded)", count)
+	}
+}
+
+// TestRecordTaskPerformance_IdleGap_EmptyAssociateSkipped covers the
+// idleness ADR's "Robot stations" limitation: an empty AssociateId must
+// never record an idle gap.
+func TestRecordTaskPerformance_IdleGap_EmptyAssociateSkipped(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+
+	_, count, err := f.idlePeriods.SumByAssociate(ctx, "", baseTime.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("SumByAssociate: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("count = %d, want 0 (a robot-station task must never record an idle gap)", count)
+	}
+}
+
+// TestRecordTaskPerformance_IdleGap_CappedAtConfiguredMax covers the
+// idleness ADR's "Cross-shift gaps" limitation: a gap spanning a shift
+// boundary is capped at IdleGapCapSeconds, not left to poison a running
+// mean.
+func TestRecordTaskPerformance_IdleGap_CappedAtConfiguredMax(t *testing.T) {
+	standards := memory.NewStandardRepo()
+	performances := memory.NewPerformanceRepo()
+	processed := memory.NewProcessedEventRepo()
+	idlePeriods := memory.NewIdlePeriodRepo()
+	publisher := events.NewLogPublisher(nil)
+	clock := memory.FixedClock{At: baseTime}
+	uc := &usecases.RecordTaskPerformance{
+		Performances: performances, Standards: standards, Processed: processed, Events: publisher, Clock: clock,
+		IdlePeriods: idlePeriods, IdleGapCapSeconds: 60,
+	}
+	ctx := context.Background()
+
+	if _, err := uc.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	// A gap of 2 hours (7200s), well over the 60s cap.
+	if _, err := uc.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime.Add(2 * time.Hour).Add(40 * time.Second),
+	}); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+
+	idleSeconds, count, err := idlePeriods.SumByAssociate(ctx, "assoc-1", baseTime.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("SumByAssociate: %v", err)
+	}
+	if count != 1 || idleSeconds != 60 {
+		t.Fatalf("count=%d idleSeconds=%d, want count=1 idleSeconds=60 (capped)", count, idleSeconds)
+	}
+}
+
+// TestRecordTaskPerformance_IdleGap_DefaultCapAppliedWhenUnset proves the
+// documented default (3600s) applies when IdleGapCapSeconds is left at
+// its zero value — the common case for every caller/test that predates
+// idleness.
+func TestRecordTaskPerformance_IdleGap_DefaultCapAppliedWhenUnset(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	// 3 hours (10800s), well over the 3600s default.
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime.Add(3 * time.Hour).Add(40 * time.Second),
+	}); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+
+	idleSeconds, count, err := f.idlePeriods.SumByAssociate(ctx, "assoc-1", baseTime.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("SumByAssociate: %v", err)
+	}
+	if count != 1 || idleSeconds != 3600 {
+		t.Fatalf("count=%d idleSeconds=%d, want count=1 idleSeconds=3600 (default cap)", count, idleSeconds)
+	}
+}
+
+// TestRecordTaskPerformance_IdleGap_NilIdlePeriodsSkipsEntirely proves
+// IdlePeriods is a genuinely optional dependency: a use case constructed
+// without it must still succeed, recording no idle gap at all.
+func TestRecordTaskPerformance_IdleGap_NilIdlePeriodsSkipsEntirely(t *testing.T) {
+	standards := memory.NewStandardRepo()
+	performances := memory.NewPerformanceRepo()
+	processed := memory.NewProcessedEventRepo()
+	publisher := events.NewLogPublisher(nil)
+	clock := memory.FixedClock{At: baseTime}
+	uc := &usecases.RecordTaskPerformance{
+		Performances: performances, Standards: standards, Processed: processed, Events: publisher, Clock: clock,
+	}
+	ctx := context.Background()
+
+	if _, err := uc.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	p, err := uc.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime.Add(time.Hour),
+	})
+	if err != nil || p == nil {
+		t.Fatalf("second Execute with nil IdlePeriods must still succeed: p=%v err=%v", p, err)
+	}
+}
+
+func TestRecordTaskPerformance_PropagatesIdlePeriodSaveError(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+
+	wrapped := &failingIdlePeriodRepo{IdlePeriodRepo: f.idlePeriods, failSave: true}
+	uc := &usecases.RecordTaskPerformance{
+		Performances: f.performances, Standards: f.standards, Processed: f.processed, Events: events.NewLogPublisher(nil), Clock: f.clock,
+		IdlePeriods: wrapped,
+	}
+	_, err := uc.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime.Add(time.Hour),
+	})
+	if !errors.Is(err, errUnmapped) {
+		t.Fatalf("error = %v, want errUnmapped", err)
+	}
+}
+
+// --- GetUtilization ----------------------------------------------------
+
+func TestGetUtilization_ForTaskType_NeverObserved_ReturnsZeroNotError(t *testing.T) {
+	f := newFixture(baseTime)
+	result, err := f.getUtilization.ForTaskType(context.Background(), shared.Slam, time.Hour)
+	if err != nil {
+		t.Fatalf("ForTaskType: %v", err)
+	}
+	if result.TaskSeconds != 0 || result.IdleSeconds != 0 || result.Associates != 0 {
+		t.Fatalf("unexpected non-zero result for never-observed task type: %+v", result)
+	}
+	if result.UtilizationPct != nil {
+		t.Fatalf("UtilizationPct = %v, want nil for a never-observed task type", *result.UtilizationPct)
+	}
+}
+
+// TestGetUtilization_ForTaskType_ComputesShareFromRealRecordedRows proves
+// the real end-to-end wiring: two completions with a gap between them
+// produce a task-type utilization result whose task/idle seconds and
+// percentage match what was actually recorded, through the real
+// RecordTaskPerformance write path, not hand-constructed fixtures.
+func TestGetUtilization_ForTaskType_ComputesShareFromRealRecordedRows(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 30, CompletedAt: baseTime.Add(30 * time.Second),
+	}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	// 70s idle gap, then a 30s task.
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 30, CompletedAt: baseTime.Add(30 * time.Second).Add(70 * time.Second).Add(30 * time.Second),
+	}); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+
+	f2 := newFixtureAt(f, baseTime.Add(time.Hour))
+	result, err := f2.getUtilization.ForTaskType(ctx, shared.Pick, 2*time.Hour)
+	if err != nil {
+		t.Fatalf("ForTaskType: %v", err)
+	}
+	if result.TaskSeconds != 60 {
+		t.Fatalf("TaskSeconds = %d, want 60", result.TaskSeconds)
+	}
+	if result.IdleSeconds != 70 {
+		t.Fatalf("IdleSeconds = %d, want 70", result.IdleSeconds)
+	}
+	if result.Associates != 1 {
+		t.Fatalf("Associates = %d, want 1", result.Associates)
+	}
+	if result.UtilizationPct == nil {
+		t.Fatal("UtilizationPct must be non-nil when both task and idle time were observed")
+	}
+	want := 100 * 60.0 / 130.0
+	if *result.UtilizationPct != want {
+		t.Fatalf("UtilizationPct = %v, want %v", *result.UtilizationPct, want)
+	}
+}
+
+// TestGetUtilization_ForAssociate_OpenGap_IncludesStillRunningIdleTime
+// covers the idleness ADR's "Trailing idleness" limitation: an associate
+// idle RIGHT NOW (their last completion has no next TaskClaimed to close
+// the gap) contributes a read-time OpenGapSeconds, computed but never
+// persisted.
+func TestGetUtilization_ForAssociate_OpenGap_IncludesStillRunningIdleTime(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// Read the utilization 90s later; the associate has no next
+	// completion, so the gap since their last completion is "open".
+	f2 := newFixtureAt(f, baseTime.Add(90*time.Second))
+	result, err := f2.getUtilization.ForAssociate(ctx, "assoc-1", time.Hour)
+	if err != nil {
+		t.Fatalf("ForAssociate: %v", err)
+	}
+	if result.OpenGapSeconds != 90 {
+		t.Fatalf("OpenGapSeconds = %d, want 90", result.OpenGapSeconds)
+	}
+	if result.IdleSeconds != 0 {
+		t.Fatalf("IdleSeconds = %d, want 0 (no CLOSED gap recorded yet)", result.IdleSeconds)
+	}
+}
+
+// TestGetUtilization_ForAssociate_NoOpenGapWhenNotCurrentlyIdle proves an
+// associate with a closed (already-completed-and-followed) gap
+// contributes zero OpenGapSeconds — the open-gap computation must not
+// double-count time already captured by a recorded IdlePeriod.
+func TestGetUtilization_ForAssociate_NoOpenGapWhenNotCurrentlyIdle(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	// A second completion CLOSES the gap right up to "now".
+	secondCompletedAt := baseTime.Add(90 * time.Second)
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 0, CompletedAt: secondCompletedAt,
+	}); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+
+	f2 := newFixtureAt(f, secondCompletedAt)
+	result, err := f2.getUtilization.ForAssociate(ctx, "assoc-1", time.Hour)
+	if err != nil {
+		t.Fatalf("ForAssociate: %v", err)
+	}
+	if result.OpenGapSeconds != 0 {
+		t.Fatalf("OpenGapSeconds = %d, want 0 (the associate just completed a task, right at 'now')", result.OpenGapSeconds)
+	}
+}
+
+func TestGetUtilization_DefaultsWindowWhenNonPositive(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	result, err := f.getUtilization.ForTaskType(ctx, shared.Pick, 0)
+	if err != nil {
+		t.Fatalf("ForTaskType: %v", err)
+	}
+	if result.WindowSeconds != int64((time.Hour).Seconds()) {
+		t.Fatalf("WindowSeconds = %d, want the 1h default", result.WindowSeconds)
 	}
 }

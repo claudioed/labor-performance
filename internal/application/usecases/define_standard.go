@@ -29,7 +29,7 @@ type DefineStandard struct {
 	Metrics ports.StandardMetrics
 }
 
-func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType, expectedSeconds int64) (*standard.LaborStandard, error) {
+func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType, expectedSeconds int64, travelComponentSeconds *int64) (*standard.LaborStandard, error) {
 	now := uc.Clock.Now()
 
 	prior, err := uc.Standards.FindCurrentlyActive(ctx, taskType)
@@ -42,7 +42,7 @@ func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType,
 		return nil, err
 	}
 
-	next, err := standard.New(id, taskType, expectedSeconds, now)
+	next, err := standard.New(id, taskType, expectedSeconds, travelComponentSeconds, now)
 	if err != nil {
 		if uc.Metrics != nil {
 			uc.Metrics.StandardDefinitionRejected(ctx)
@@ -66,9 +66,9 @@ func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType,
 		}
 
 		if prior != nil {
-			return uc.Events.Publish(ctx, shared.NewLaborStandardRevised(now, id, taskType, prior.ExpectedSeconds(), expectedSeconds, now))
+			return uc.Events.Publish(ctx, shared.NewLaborStandardRevised(now, id, taskType, prior.ExpectedSeconds(), expectedSeconds, travelComponentSeconds, now))
 		}
-		return uc.Events.Publish(ctx, shared.NewLaborStandardDefined(now, id, taskType, expectedSeconds, now))
+		return uc.Events.Publish(ctx, shared.NewLaborStandardDefined(now, id, taskType, expectedSeconds, travelComponentSeconds, now))
 	})
 	if err != nil {
 		return nil, err

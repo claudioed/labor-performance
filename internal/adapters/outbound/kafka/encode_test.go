@@ -19,9 +19,9 @@ func TestAnalyticsPublisherEncodeProducesOneWireMessagePerContractEvent(t *testi
 	p, w := newTestPublisher()
 
 	msgs, err := p.Encode(context.Background(),
-		shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9)),
+		shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9)),
 		unknownEvent{},
-		shared.NewTaskPerformanceRecorded(at(11), "task-1", shared.AssociateId("assoc-1"), shared.Pack, 52, &pct, at(9)),
+		shared.NewTaskPerformanceRecorded(at(11), "task-1", shared.AssociateId("assoc-1"), shared.Pack, 52, &pct, nil, at(9)),
 	)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -67,7 +67,7 @@ func TestAnalyticsPublisherEncodeProducesOneWireMessagePerContractEvent(t *testi
 // stores what Encode returns and the direct path writes what Publish
 // builds, and the projector must not be able to tell them apart.
 func TestAnalyticsPublisherPublishWritesExactlyWhatEncodeProduces(t *testing.T) {
-	event := shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9))
+	event := shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9))
 
 	encoder := &AnalyticsPublisher{NewID: func() string { return "evt-fixed" }}
 	encoded, err := encoder.Encode(context.Background(), event)
@@ -106,7 +106,7 @@ func TestAnalyticsPublisherEncodeCapturesTraceHeadersFromContext(t *testing.T) {
 	defer span.End()
 
 	p, _ := newTestPublisher()
-	msgs, err := p.Encode(ctx, shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, at(9)))
+	msgs, err := p.Encode(ctx, shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9)))
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}

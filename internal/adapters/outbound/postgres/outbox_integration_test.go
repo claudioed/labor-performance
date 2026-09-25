@@ -104,6 +104,10 @@ func analyticsEncoder() *outboundkafka.AnalyticsPublisher {
 	return &outboundkafka.AnalyticsPublisher{NewID: uuid.NewString}
 }
 
+func integrationEncoder() *outboundkafka.IntegrationPublisher {
+	return &outboundkafka.IntegrationPublisher{NewID: uuid.NewString}
+}
+
 func TestOutbox_DefineStandard_CommitsAggregateAndEventTogether(t *testing.T) {
 	pool := outboxDB(t)
 	ctx := context.Background()
@@ -116,12 +120,12 @@ func TestOutbox_DefineStandard_CommitsAggregateAndEventTogether(t *testing.T) {
 		UnitOfWork: postgres.NewUnitOfWork(pool),
 	}
 
-	if _, err := uc.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := uc.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("define: %v", err)
 	}
 	// Revise: closes the prior and inserts a new one in the same scope.
 	uc.Clock = memory.FixedClock{At: now.Add(time.Minute)}
-	if _, err := uc.Execute(ctx, shared.Pick, 40); err != nil {
+	if _, err := uc.Execute(ctx, shared.Pick, 40, nil); err != nil {
 		t.Fatalf("revise: %v", err)
 	}
 
@@ -189,7 +193,7 @@ func TestOutbox_PublishFailure_RollsBackAggregate(t *testing.T) {
 	uow := postgres.NewUnitOfWork(pool)
 
 	define := &usecases.DefineStandard{Standards: postgres.NewStandardRepo(pool), Events: broken, Clock: memory.FixedClock{At: now}, UnitOfWork: uow}
-	if _, err := define.Execute(ctx, shared.Slam, 30); err == nil {
+	if _, err := define.Execute(ctx, shared.Slam, 30, nil); err == nil {
 		t.Fatal("expected the failing encoder to fail the publish")
 	}
 	if got := countRows(t, pool, "labor_standards", "task_type = 'SLAM'"); got != 0 {
@@ -231,11 +235,11 @@ func TestOutboxRelay_PublishesInOrderAndMarksRows(t *testing.T) {
 	uow := postgres.NewUnitOfWork(pool)
 
 	define := &usecases.DefineStandard{Standards: postgres.NewStandardRepo(pool), Events: pub, Clock: memory.FixedClock{At: now}, UnitOfWork: uow}
-	if _, err := define.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := define.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("define: %v", err)
 	}
 	define.Clock = memory.FixedClock{At: now.Add(time.Second)}
-	if _, err := define.Execute(ctx, shared.Pick, 40); err != nil {
+	if _, err := define.Execute(ctx, shared.Pick, 40, nil); err != nil {
 		t.Fatalf("revise: %v", err)
 	}
 	record := &usecases.RecordTaskPerformance{
@@ -285,7 +289,7 @@ func TestOutboxRelay_SinkFailure_StopsAtFailedRowAndRetriesLater(t *testing.T) {
 	uow := postgres.NewUnitOfWork(pool)
 	define := &usecases.DefineStandard{Standards: postgres.NewStandardRepo(pool), Events: pub, Clock: memory.FixedClock{At: now}, UnitOfWork: uow}
 	for _, tt := range []shared.TaskType{shared.Pick, shared.Pack, shared.Slam} {
-		if _, err := define.Execute(ctx, tt, 30); err != nil {
+		if _, err := define.Execute(ctx, tt, 30, nil); err != nil {
 			t.Fatalf("define %s: %v", tt, err)
 		}
 	}
@@ -331,12 +335,61 @@ func TestOutboxRelay_SinkFailure_StopsAtFailedRowAndRetriesLater(t *testing.T) {
 	}
 }
 
+func TestOutbox_RecordTaskPerformance_FansOutToBothAnalyticsAndIntegrationTopics(t *testing.T) {
+	pool := outboxDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	uc := &usecases.RecordTaskPerformance{
+		Performances: postgres.NewPerformanceRepo(pool),
+		Standards:    postgres.NewStandardRepo(pool),
+		Processed:    postgres.NewProcessedEventRepo(pool),
+		Events:       postgres.NewOutboxPublisher(pool, analyticsEncoder(), integrationEncoder()),
+		Clock:        memory.FixedClock{At: now},
+		UnitOfWork:   postgres.NewUnitOfWork(pool),
+	}
+	req := usecases.RecordTaskPerformanceRequest{KafkaEventId: "evt-fanout", TaskId: "task-fanout", AssociateId: "assoc-fanout", TaskType: shared.Pick, ActualSeconds: 41, CompletedAt: now}
+
+	if p, err := uc.Execute(ctx, req); err != nil || p == nil {
+		t.Fatalf("record: p=%v err=%v", p, err)
+	}
+
+	// ONE TaskPerformanceRecorded event, encoded through BOTH encoders,
+	// must produce ONE outbox row per topic — the fan-out variant of
+	// ADR 0010, extended by ADR 0013's integration topic.
+	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND topic = '%s' AND event_type = '%s' AND key = 'PICK'", envelope.TopicLaborPerformanceAnalytics, envelope.EventTypeTaskPerformanceRecorded)); got != 1 {
+		t.Fatalf("expected 1 unpublished analytics-topic row keyed PICK, got %d", got)
+	}
+	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND topic = '%s' AND event_type = '%s' AND key = 'assoc-fanout'", envelope.TopicLaborPerformanceEvents, envelope.EventTypeTaskPerformanceRecorded)); got != 1 {
+		t.Fatalf("expected 1 unpublished integration-topic row keyed assoc-fanout, got %d", got)
+	}
+	if got := countOutbox(t, pool, "true"); got != 2 {
+		t.Fatalf("expected exactly 2 outbox rows total (one per topic), got %d", got)
+	}
+
+	sink := &recordingSink{}
+	relay := postgres.NewOutboxRelay(pool, sink, slog.Default())
+	n, err := relay.RelayOnce(ctx)
+	if err != nil {
+		t.Fatalf("relay: %v", err)
+	}
+	if n != 2 || len(sink.sent) != 2 {
+		t.Fatalf("expected 2 published, got n=%d sent=%d", n, len(sink.sent))
+	}
+	gotTopics := map[string]bool{}
+	for _, m := range sink.sent {
+		gotTopics[m.Topic] = true
+	}
+	if !gotTopics[envelope.TopicLaborPerformanceAnalytics] || !gotTopics[envelope.TopicLaborPerformanceEvents] {
+		t.Fatalf("expected the relay to forward to both topics, got %v", sink.sent)
+	}
+}
+
 func TestOutboxRelay_Run_DrainsUntilCancelled(t *testing.T) {
 	pool := outboxDB(t)
 	ctx := context.Background()
 	pub := postgres.NewOutboxPublisher(pool, analyticsEncoder())
 	define := &usecases.DefineStandard{Standards: postgres.NewStandardRepo(pool), Events: pub, Clock: memory.FixedClock{At: time.Now().UTC()}, UnitOfWork: postgres.NewUnitOfWork(pool)}
-	if _, err := define.Execute(ctx, shared.Pick, 45); err != nil {
+	if _, err := define.Execute(ctx, shared.Pick, 45, nil); err != nil {
 		t.Fatalf("define: %v", err)
 	}
 

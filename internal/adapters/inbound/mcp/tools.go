@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/otel"
@@ -35,6 +36,10 @@ type Deps struct {
 	GetTaskTypePerformance *usecases.GetTaskTypePerformance
 	// GetStandard is the existing read use case behind get_labor_standard.
 	GetStandard *usecases.GetStandard
+	// GetUtilization is the read use case behind
+	// get_task_type_utilization, the SAME use case the REST
+	// utilization endpoints call -- never a parallel code path.
+	GetUtilization *usecases.GetUtilization
 }
 
 // --- get_associate_scorecard --------------------------------------------------
@@ -90,6 +95,27 @@ func (d Deps) getLaborStandard(ctx context.Context, in laborStandardInput) (stan
 	return toStandardDTO(s), nil
 }
 
+// --- get_task_type_utilization ---------------------------------------------------
+
+type taskTypeUtilizationInput struct {
+	TaskType string `json:"taskType" jsonschema:"the task type to report idleness/utilization for: PICK, PACK, or SLAM"`
+	// WindowSeconds is optional; a non-positive value applies
+	// GetUtilization's default window (1 hour).
+	WindowSeconds int64 `json:"windowSeconds,omitempty" jsonschema:"the trailing window, in seconds, to measure over; defaults to 3600 (1 hour) when omitted or non-positive"`
+}
+
+func (d Deps) getTaskTypeUtilization(ctx context.Context, in taskTypeUtilizationInput) (utilizationDTO, error) {
+	taskType, err := shared.NewTaskType(in.TaskType)
+	if err != nil {
+		return utilizationDTO{}, err
+	}
+	result, err := d.GetUtilization.ForTaskType(ctx, taskType, time.Duration(in.WindowSeconds)*time.Second)
+	if err != nil {
+		return utilizationDTO{}, err
+	}
+	return toUtilizationDTO(result), nil
+}
+
 // --- registration -------------------------------------------------------------
 
 // registerTools adds every tool to the server, each wrapped so its handler
@@ -117,6 +143,12 @@ func (d Deps) registerTools(server *mcp.Server) {
 		Description: "Return the currently-active engineered labor standard (expected seconds) for one task type. Use it to answer 'what is the target pace for this task type' questions, e.g. before judging whether an observed pace is fast or slow.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, d.getLaborStandard)
+
+	addTool(server, &mcp.Tool{
+		Name:        "get_task_type_utilization",
+		Description: "Return idleness/utilization for one task type over a trailing window: measured task time, measured idle time (between-task waits), the still-running open gap for anyone currently idle, and a derived utilization percent. Use it to answer 'how idle vs. busy has this task type been' questions -- e.g. distinguishing a genuinely understaffed task type from one with a stuck/lease-churn problem. utilizationPct is null when nothing was observed in the window; never treat null as 0%.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
+	}, d.getTaskTypeUtilization)
 }
 
 // addTool registers one tool. It centralises the cross-cutting concern

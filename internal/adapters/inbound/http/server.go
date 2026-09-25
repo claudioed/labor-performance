@@ -30,6 +30,7 @@ type Server struct {
 	GetStandard            *usecases.GetStandard
 	GetAssociateScorecard  *usecases.GetAssociateScorecard
 	GetTaskTypePerformance *usecases.GetTaskTypePerformance
+	GetUtilization         *usecases.GetUtilization
 }
 
 // NewRouter builds the chi router for every endpoint in CLAUDE.md's REST
@@ -68,6 +69,8 @@ func NewRouter(s *Server, logger *slog.Logger, serviceName string) http.Handler 
 	r.Get("/standards/{taskType}", s.handleGetStandard)
 	r.Get("/associates/{associateId}/scorecard", s.handleGetAssociateScorecard)
 	r.Get("/task-types/{taskType}/performance", s.handleGetTaskTypePerformance)
+	r.Get("/task-types/{taskType}/utilization", s.handleGetTaskTypeUtilization)
+	r.Get("/associates/{associateId}/utilization", s.handleGetAssociateUtilization)
 
 	return r
 }
@@ -88,13 +91,13 @@ func (s *Server) handleDefineStandard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, err := s.DefineStandard.Execute(r.Context(), taskType, req.ExpectedSeconds)
+	st, err := s.DefineStandard.Execute(r.Context(), taskType, req.ExpectedSeconds, req.TravelComponentSeconds)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.EffectiveFrom(), st.EffectiveTo()))
+	writeJSON(w, http.StatusCreated, toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.TravelComponentSeconds(), st.EffectiveFrom(), st.EffectiveTo()))
 }
 
 func (s *Server) handleGetStandard(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +113,7 @@ func (s *Server) handleGetStandard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.EffectiveFrom(), st.EffectiveTo()))
+	writeJSON(w, http.StatusOK, toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.TravelComponentSeconds(), st.EffectiveFrom(), st.EffectiveTo()))
 }
 
 func (s *Server) handleGetAssociateScorecard(w http.ResponseWriter, r *http.Request) {
@@ -146,19 +149,78 @@ func (s *Server) handleGetTaskTypePerformance(w http.ResponseWriter, r *http.Req
 	})
 }
 
+func (s *Server) handleGetTaskTypeUtilization(w http.ResponseWriter, r *http.Request) {
+	taskType, err := shared.NewTaskType(chi.URLParam(r, "taskType"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
+	result, err := s.GetUtilization.ForTaskType(r.Context(), taskType, windowParam(r))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toUtilizationResponse(result))
+}
+
+func (s *Server) handleGetAssociateUtilization(w http.ResponseWriter, r *http.Request) {
+	associateId := shared.AssociateId(chi.URLParam(r, "associateId"))
+
+	result, err := s.GetUtilization.ForAssociate(r.Context(), associateId, windowParam(r))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toUtilizationResponse(result))
+}
+
+// windowParam parses the "window" query param as a Go duration string
+// (e.g. "1h", "30m"). An absent or malformed value resolves to zero,
+// which GetUtilization's callers treat as "apply the default" — a typo
+// here must degrade gracefully, not 400, mirroring every other tuning
+// knob in this fleet.
+func windowParam(r *http.Request) time.Duration {
+	raw := r.URL.Query().Get("window")
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0
+	}
+	return d
+}
+
+func toUtilizationResponse(result usecases.UtilizationResult) utilizationResponse {
+	return utilizationResponse{
+		TaskType:       string(result.TaskType),
+		AssociateId:    string(result.AssociateId),
+		Associates:     result.Associates,
+		WindowSeconds:  result.WindowSeconds,
+		TaskSeconds:    result.TaskSeconds,
+		IdleSeconds:    result.IdleSeconds,
+		OpenGapSeconds: result.OpenGapSeconds,
+		UtilizationPct: result.UtilizationPct,
+	}
+}
+
 const timeFormat = time.RFC3339
 
-func toStandardResponse(taskType shared.TaskType, expectedSeconds int64, effectiveFrom time.Time, effectiveTo *time.Time) standardResponse {
+func toStandardResponse(taskType shared.TaskType, expectedSeconds int64, travelComponentSeconds *int64, effectiveFrom time.Time, effectiveTo *time.Time) standardResponse {
 	var to *string
 	if effectiveTo != nil {
 		formatted := effectiveTo.UTC().Format(timeFormat)
 		to = &formatted
 	}
 	return standardResponse{
-		TaskType:        string(taskType),
-		ExpectedSeconds: expectedSeconds,
-		EffectiveFrom:   effectiveFrom.UTC().Format(timeFormat),
-		EffectiveTo:     to,
+		TaskType:               string(taskType),
+		ExpectedSeconds:        expectedSeconds,
+		TravelComponentSeconds: travelComponentSeconds,
+		EffectiveFrom:          effectiveFrom.UTC().Format(timeFormat),
+		EffectiveTo:            to,
 	}
 }
 

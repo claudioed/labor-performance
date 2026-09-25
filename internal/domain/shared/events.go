@@ -31,16 +31,22 @@ type LaborStandardDefined struct {
 	StandardId      StandardId
 	TaskType        TaskType
 	ExpectedSeconds int64
-	EffectiveFrom   time.Time
+	// TravelComponentSeconds is the optional travel-time breakdown of
+	// ExpectedSeconds this standard declared — nil when not declared
+	// (the common case). See standard.LaborStandard's own doc comment
+	// and ADR 0015.
+	TravelComponentSeconds *int64
+	EffectiveFrom          time.Time
 }
 
-func NewLaborStandardDefined(occurredAt time.Time, id StandardId, taskType TaskType, expectedSeconds int64, effectiveFrom time.Time) LaborStandardDefined {
+func NewLaborStandardDefined(occurredAt time.Time, id StandardId, taskType TaskType, expectedSeconds int64, travelComponentSeconds *int64, effectiveFrom time.Time) LaborStandardDefined {
 	return LaborStandardDefined{
-		base:            newBase("LaborStandardDefined", occurredAt),
-		StandardId:      id,
-		TaskType:        taskType,
-		ExpectedSeconds: expectedSeconds,
-		EffectiveFrom:   effectiveFrom,
+		base:                   newBase("LaborStandardDefined", occurredAt),
+		StandardId:             id,
+		TaskType:               taskType,
+		ExpectedSeconds:        expectedSeconds,
+		TravelComponentSeconds: travelComponentSeconds,
+		EffectiveFrom:          effectiveFrom,
 	}
 }
 
@@ -53,17 +59,24 @@ type LaborStandardRevised struct {
 	TaskType                TaskType
 	PreviousExpectedSeconds int64
 	NewExpectedSeconds      int64
-	EffectiveFrom           time.Time
+	// NewTravelComponentSeconds is the optional travel-time breakdown
+	// declared on the NEW (revised) standard — nil when not declared.
+	// The previous standard's own travel component, if any, is not
+	// carried on this event: it remains queryable on that closed
+	// LaborStandard row exactly as it was.
+	NewTravelComponentSeconds *int64
+	EffectiveFrom             time.Time
 }
 
-func NewLaborStandardRevised(occurredAt time.Time, id StandardId, taskType TaskType, previousExpectedSeconds, newExpectedSeconds int64, effectiveFrom time.Time) LaborStandardRevised {
+func NewLaborStandardRevised(occurredAt time.Time, id StandardId, taskType TaskType, previousExpectedSeconds, newExpectedSeconds int64, newTravelComponentSeconds *int64, effectiveFrom time.Time) LaborStandardRevised {
 	return LaborStandardRevised{
-		base:                    newBase("LaborStandardRevised", occurredAt),
-		StandardId:              id,
-		TaskType:                taskType,
-		PreviousExpectedSeconds: previousExpectedSeconds,
-		NewExpectedSeconds:      newExpectedSeconds,
-		EffectiveFrom:           effectiveFrom,
+		base:                      newBase("LaborStandardRevised", occurredAt),
+		StandardId:                id,
+		TaskType:                  taskType,
+		PreviousExpectedSeconds:   previousExpectedSeconds,
+		NewExpectedSeconds:        newExpectedSeconds,
+		NewTravelComponentSeconds: newTravelComponentSeconds,
+		EffectiveFrom:             effectiveFrom,
 	}
 }
 
@@ -76,17 +89,30 @@ type TaskPerformanceRecorded struct {
 	TaskType      TaskType
 	ActualSeconds int64
 	EfficiencyPct *float64
-	CompletedAt   time.Time
+	// IdleSecondsBefore is the measured idle gap immediately preceding
+	// this task's claim (previous completion -> this claim instant),
+	// mirroring EfficiencyPct's existing nullable-pointer pattern: nil
+	// -- never a fabricated number -- when there was no prior
+	// completion to measure from (this associate's first-ever
+	// observation), the gap was negative/zero (Kafka redelivered or
+	// reordered the underlying TaskCompleted events), or AssociateId is
+	// empty (no checked-in occupant, e.g. a robot station). ADDITIVE:
+	// existing consumers unmarshaling unknown-field-tolerant JSON are
+	// unaffected by this field's presence. See the idleness package and
+	// its ADR for the full "Idle Gap" vocabulary.
+	IdleSecondsBefore *int64
+	CompletedAt       time.Time
 }
 
-func NewTaskPerformanceRecorded(occurredAt time.Time, taskId string, associateId AssociateId, taskType TaskType, actualSeconds int64, efficiencyPct *float64, completedAt time.Time) TaskPerformanceRecorded {
+func NewTaskPerformanceRecorded(occurredAt time.Time, taskId string, associateId AssociateId, taskType TaskType, actualSeconds int64, efficiencyPct *float64, idleSecondsBefore *int64, completedAt time.Time) TaskPerformanceRecorded {
 	return TaskPerformanceRecorded{
-		base:          newBase("TaskPerformanceRecorded", occurredAt),
-		TaskId:        taskId,
-		AssociateId:   associateId,
-		TaskType:      taskType,
-		ActualSeconds: actualSeconds,
-		EfficiencyPct: efficiencyPct,
-		CompletedAt:   completedAt,
+		base:              newBase("TaskPerformanceRecorded", occurredAt),
+		TaskId:            taskId,
+		AssociateId:       associateId,
+		TaskType:          taskType,
+		ActualSeconds:     actualSeconds,
+		EfficiencyPct:     efficiencyPct,
+		IdleSecondsBefore: idleSecondsBefore,
+		CompletedAt:       completedAt,
 	}
 }

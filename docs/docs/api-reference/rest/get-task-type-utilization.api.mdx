@@ -1,0 +1,71 @@
+---
+id: get-task-type-utilization
+title: "Get fleet-wide idle-gap / utilization for a TaskType over a trailing window"
+description: "Measured task time vs. measured idle time (between-task waits) for one TaskType, plus the still-running open-gap contribution for anyone currently idle (computed at read time, never persisted). Always returns 200, including a zero-count result for a TaskType this service has never observed."
+sidebar_label: "Get fleet-wide idle-gap / utilization for a TaskType over a trailing window"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "get api-method"
+info_path: docs/api-reference/rest/labor-performance-api
+custom_edit_url: null
+hide_send_button: true
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Get fleet-wide idle-gap / utilization for a TaskType over a trailing window"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/task-types/{taskType}/utilization"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Measured task time vs. measured idle time (between-task waits) for one TaskType, plus the still-running open-gap contribution for anyone currently idle (computed at read time, never persisted). Always returns 200, including a zero-count result for a TaskType this service has never observed.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./get-task-type-utilization.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-task-type-utilization.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-task-type-utilization.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

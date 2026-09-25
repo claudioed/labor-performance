@@ -7,15 +7,27 @@ package http
 type defineStandardRequest struct {
 	TaskType        string `json:"taskType"`
 	ExpectedSeconds int64  `json:"expectedSeconds"`
+	// TravelComponentSeconds is an OPTIONAL declaration of how much of
+	// ExpectedSeconds is attributable to travel between locations for
+	// this TaskType. This service never computes it itself — it is
+	// supplied by the caller, grounded in a real distance estimate
+	// performed elsewhere (e.g. facility-layout's
+	// estimate_travel_distance), since this service has no REST
+	// dependency in either direction with any sibling context (ADR
+	// 0015). Omitted entirely means "not broken out", the default.
+	TravelComponentSeconds *int64 `json:"travelComponentSeconds,omitempty"`
 }
 
 // standardResponse is the response body for DefineStandard and
 // GetStandard.
 type standardResponse struct {
-	TaskType        string  `json:"taskType"`
-	ExpectedSeconds int64   `json:"expectedSeconds"`
-	EffectiveFrom   string  `json:"effectiveFrom"`
-	EffectiveTo     *string `json:"effectiveTo,omitempty"`
+	TaskType        string `json:"taskType"`
+	ExpectedSeconds int64  `json:"expectedSeconds"`
+	// TravelComponentSeconds is omitted entirely (not defaulted to 0)
+	// when this standard never declared one.
+	TravelComponentSeconds *int64  `json:"travelComponentSeconds,omitempty"`
+	EffectiveFrom          string  `json:"effectiveFrom"`
+	EffectiveTo            *string `json:"effectiveTo,omitempty"`
 }
 
 // taskTypeBreakdownResponse is one TaskType's slice of a
@@ -55,6 +67,22 @@ type taskTypePerformanceResponse struct {
 	// See ports.TaskTypePerformance's doc comment for the full
 	// distinction from MeanEfficiencyPct.
 	MeanActualSeconds *float64 `json:"meanActualSeconds"`
+}
+
+// utilizationResponse is the response body for both
+// GET /task-types/{taskType}/utilization and
+// GET /associates/{associateId}/utilization. taskType/associateId are
+// mutually exclusive — whichever endpoint served the request populates
+// its own identifying field and omits the other.
+type utilizationResponse struct {
+	TaskType       string   `json:"taskType,omitempty"`
+	AssociateId    string   `json:"associateId,omitempty"`
+	Associates     int      `json:"associates"`
+	WindowSeconds  int64    `json:"windowSeconds"`
+	TaskSeconds    int64    `json:"taskSeconds"`
+	IdleSeconds    int64    `json:"idleSeconds"`
+	OpenGapSeconds int64    `json:"openGapSeconds"`
+	UtilizationPct *float64 `json:"utilizationPct"`
 }
 
 // problemDetails is the RFC 7807 (Problem Details for HTTP APIs) response

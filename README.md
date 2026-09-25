@@ -382,17 +382,12 @@ cosign keyless signing + SPDX SBOM attestation), and **`release`**
 
 ## Known gaps
 
-- **`fulfillment-execution`'s `TaskCompleted` payload does not carry a
-  `task_type` field today**, verified against its actual
-  `feature/labor-performance-hooks` publisher this session. This service
-  resolves `TaskType` as `""` (unclassified) for every consumed event as a
-  result. A `""`-typed row is still recorded and counted, but never
-  resolves a `LaborStandard` and never appears under
-  `GetTaskTypePerformance` (which requires PICK/PACK/SLAM). Adding
-  `task_type` to that payload on the fulfillment-execution side is a
-  natural, additive fast-follow that would let this service resolve it
-  directly — see
-  [ADR 0003](docs/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution.md).
+None currently open. The previous entry here — `fulfillment-execution`'s
+`TaskCompleted` payload not carrying a `task_type` field, leaving every
+consumed event bucketed as `""` (unclassified) — was closed by
+fulfillment-execution ADR-0023 (`task_type` added to the wire payload)
+together with this service's own consumer update (`ParseTaskTypeLenient`
+now receives the real value instead of a hardcoded `""`).
 
 ## Deferred (v1)
 
@@ -472,3 +467,52 @@ The full, current list (0001–0012) is in [docs/docs/adr/about.md](docs/docs/ad
 ## License
 
 MIT (or match the other repos' licensing — TBD).
+
+## Operator micro-frontend (`web/`)
+
+`web/` is `labor_mfe`, this context's Module Federation remote. It talks only to
+this service's own REST API and is never part of `make check`.
+
+**Standalone development** is unchanged:
+
+```bash
+cd web && npm install && npm run dev     # http://localhost:5187
+```
+
+**Deployed to the kind cluster**, it is built into a static bundle and served
+by its own `nginx-unprivileged` pod:
+
+```bash
+cd web
+docker build --build-context uikit=../../warehouse-ui-kit \
+  -t warehouse/labor-performance-frontend:local .
+```
+
+The cluster's localhost topology separates the two kinds of traffic onto two
+independent entrypoints, and neither proxies to the other:
+
+| URL | Served by | Carries |
+|---|---|---|
+| `http://localhost/mfes/labor-performance/` | Nginx web gateway → this remote's nginx pod | HTML, JS, CSS, fonts, `remoteEntry.js` |
+| `http://localhost:8000/api/labor-performance/` | Kong | this service's REST API |
+
+Kong never serves frontend assets, and the Nginx gateway never proxies an API.
+Enable the workload with `frontend.enabled=true` in the Helm chart; the Service
+is deliberately `ClusterIP` with no Ingress/HTTPRoute, because frontend path
+routing belongs to the Nginx web gateway in `warehouse-infra`.
+
+Because one image must work in more than one environment, the remote reads its
+API origin at runtime from `window.__WAREHOUSE_CONFIG__.apiOrigin` (published
+by the console shell) rather than baking a hostname in at build time. A
+production build with no runtime config **fails loudly** instead of silently
+falling back to a developer port; standalone `npm run dev` still uses
+`http://localhost:8088`. See `web/src/config.ts`.
+
+Chart invariants are asserted by:
+
+```bash
+python3 charts/labor-performance/tests/test_service_selectors.py
+```
+
+which proves every Service selects exactly one Deployment — the OLTP Service
+must never select the frontend, analytics or MCP pods.

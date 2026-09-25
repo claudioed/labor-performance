@@ -39,21 +39,23 @@ func NewTaskType(value string) (TaskType, error) {
 // ParseTaskTypeLenient coerces raw into a known TaskType, or "" ("
 // unclassified") when raw is empty or not one of the three known values.
 //
-// This exists because of a genuine, documented wire-contract gap: as
-// verified against fulfillment-execution's feature/labor-performance-hooks
-// publisher this session, TaskCompletedData carries no task_type field at
-// all today (only task_id, station_id, work_unit_id, associate_id,
-// duration_seconds — see the exact envelope in CLAUDE.md's "Inbound Kafka
-// contract" section). Since this service MUST NOT call fulfillment-
-// execution synchronously to resolve a task's type, and a TaskCompleted
-// event is a real, must-be-recorded business fact regardless, an
-// absent/unrecognized task_type degrades to "" (unclassified) exactly like
-// an absent associate_id degrades to "" — it never blocks recording the
-// row. A "" TaskType simply never has a LaborStandard to compare against
-// (no lookup is possible without a known type) and never appears under any
-// GetTaskTypePerformance query (those require one of the three known
-// values), which is documented explicitly in the README as a known v1 gap
-// pending a future fulfillment-execution enrichment.
+// The consumer (internal/adapters/inbound/kafka/consumer.go) always
+// routes fulfillment-execution's TaskCompleted.task_type through here
+// rather than trusting it directly: since this service MUST NOT call
+// fulfillment-execution synchronously to resolve a task's type, and a
+// TaskCompleted event is a real, must-be-recorded business fact
+// regardless, an absent/unrecognized task_type degrades to ""
+// (unclassified) exactly like an absent associate_id degrades to "" — it
+// never blocks recording the row. This still matters even now that
+// fulfillment-execution's ADR-0023 puts a real task_type on the wire for
+// every findable task: an older payload predating that ADR, a REBIN
+// completion (a fourth task type this service does not model an
+// engineered labor standard for), or the lookup-miss degrade case ADR-0023
+// itself documents all still need to land here safely, not panic or
+// reject the completion. A "" TaskType simply never has a LaborStandard
+// to compare against (no lookup is possible without a known type) and
+// never appears under any GetTaskTypePerformance query (those require one
+// of the three known values).
 func ParseTaskTypeLenient(raw string) TaskType {
 	switch TaskType(raw) {
 	case Pick, Pack, Slam:

@@ -8,6 +8,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/claudioed/labor-performance/internal/domain/idleness"
 	"github.com/claudioed/labor-performance/internal/domain/performance"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 	"github.com/claudioed/labor-performance/internal/domain/standard"
@@ -64,6 +65,14 @@ type PerformanceRepo interface {
 	// signal only ever needs a small recent slice, never the full
 	// history.
 	RecentByAssociateID(ctx context.Context, associateId shared.AssociateId, limit int) ([]*performance.TaskPerformance, error)
+	// SumActualSecondsByTaskType returns the total ActualSeconds across
+	// rows for taskType whose CompletedAt falls within [since, now) —
+	// the "task time" half of GetUtilization's windowed utilization
+	// computation.
+	SumActualSecondsByTaskType(ctx context.Context, taskType shared.TaskType, since time.Time) (int64, error)
+	// SumActualSecondsByAssociate is SumActualSecondsByTaskType's
+	// per-associate counterpart.
+	SumActualSecondsByAssociate(ctx context.Context, associateId shared.AssociateId, since time.Time) (int64, error)
 }
 
 // Scorecard is the per-associate read model — a projection over
@@ -113,6 +122,43 @@ type TaskTypePerformance struct {
 	// ActualSeconds was ever recorded for this TaskType — never a
 	// fabricated number.
 	MeanActualSeconds *float64
+}
+
+// IdlePeriodRepo persists IdlePeriod aggregates — the between-task idle
+// gap this service derives, per associate, on the SAME Kafka-consume
+// path RecordTaskPerformance already runs on (see
+// internal/domain/idleness). "Last completion" (the gap's start
+// boundary) is deliberately NOT a separate query on this port: it is
+// answered by the existing PerformanceRepo.RecentByAssociateID(ctx, id,
+// 1), which already indexes associate+completedAt for exactly this
+// purpose — duplicating that query here would violate DRY for no
+// benefit.
+type IdlePeriodRepo interface {
+	// Save persists p. Not itself idempotency-gated: RecordTaskPerformance's
+	// existing KafkaEventId dedup, on the same unit of work, already
+	// prevents a redelivered TaskCompleted from writing a second gap.
+	Save(ctx context.Context, p *idleness.IdlePeriod) error
+	// SumByTaskType returns the total recorded idle seconds and count
+	// of idle-gap rows whose TaskType matches taskType and whose
+	// EndedAt falls within [since, now) — the raw inputs
+	// GetUtilization sums against PerformanceRepo's matching ActualSeconds
+	// query to compute a windowed utilization percentage.
+	SumByTaskType(ctx context.Context, taskType shared.TaskType, since time.Time) (idleSeconds int64, count int, err error)
+	// SumByAssociate is SumByTaskType's per-associate counterpart.
+	SumByAssociate(ctx context.Context, associateId shared.AssociateId, since time.Time) (idleSeconds int64, count int, err error)
+	// LastEndedAtByAssociate returns the EndedAt of associateId's most
+	// recently recorded idle gap, or the zero time if none exists.
+	// GetUtilization's OPEN GAP computation (see the idleness ADR's
+	// "Trailing idleness" limitation) needs this to decide whether an
+	// associate is idle RIGHT NOW, distinct from the windowed closed
+	// gaps SumByAssociate already totals.
+	LastEndedAtByAssociate(ctx context.Context, associateId shared.AssociateId) (time.Time, error)
+	// DistinctAssociatesByTaskType returns the count of distinct
+	// associates with at least one recorded idle-gap row for taskType
+	// whose EndedAt falls within [since, now) — surfaced on
+	// GetUtilization's task-type-scoped result so a caller can see how
+	// many people a fleet-wide aggregate actually spans.
+	DistinctAssociatesByTaskType(ctx context.Context, taskType shared.TaskType, since time.Time) (int, error)
 }
 
 // EventPublisher publishes domain events raised by aggregates. v1 ships a

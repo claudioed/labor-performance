@@ -4,6 +4,7 @@ metadata:
   name: {{ include "labor-performance.fullname" . }}
   labels:
     {{- include "labor-performance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -13,3 +14,4 @@ spec:
       name: http
   selector:
     {{- include "labor-performance.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api

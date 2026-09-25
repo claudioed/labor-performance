@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"github.com/claudioed/labor-performance/internal/application/ports"
+	"github.com/claudioed/labor-performance/internal/application/usecases"
 	"github.com/claudioed/labor-performance/internal/domain/standard"
 )
 
@@ -75,19 +76,49 @@ func toTaskTypePerformanceDTO(p ports.TaskTypePerformance) taskTypePerformanceDT
 	}
 }
 
+// utilizationDTO is the get_task_type_utilization tool's output.
+type utilizationDTO struct {
+	TaskType       string `json:"taskType"`
+	Associates     int    `json:"associates"`
+	WindowSeconds  int64  `json:"windowSeconds"`
+	TaskSeconds    int64  `json:"taskSeconds"`
+	IdleSeconds    int64  `json:"idleSeconds"`
+	OpenGapSeconds int64  `json:"openGapSeconds"`
+	// UtilizationPct is nil when there was nothing to compute a share
+	// of over the window -- never a fabricated number.
+	UtilizationPct *float64 `json:"utilizationPct"`
+}
+
+func toUtilizationDTO(r usecases.UtilizationResult) utilizationDTO {
+	return utilizationDTO{
+		TaskType:       string(r.TaskType),
+		Associates:     r.Associates,
+		WindowSeconds:  r.WindowSeconds,
+		TaskSeconds:    r.TaskSeconds,
+		IdleSeconds:    r.IdleSeconds,
+		OpenGapSeconds: r.OpenGapSeconds,
+		UtilizationPct: r.UtilizationPct,
+	}
+}
+
 // standardDTO is the get_labor_standard tool's output.
 type standardDTO struct {
-	TaskType        string  `json:"taskType"`
-	ExpectedSeconds int64   `json:"expectedSeconds"`
-	EffectiveFrom   string  `json:"effectiveFrom"`
-	EffectiveTo     *string `json:"effectiveTo,omitempty"`
+	TaskType        string `json:"taskType"`
+	ExpectedSeconds int64  `json:"expectedSeconds"`
+	// TravelComponentSeconds is omitted entirely (not defaulted to 0)
+	// when this standard never declared one — mirrors the REST
+	// surface's own omit-when-unset discipline (ADR 0015).
+	TravelComponentSeconds *int64  `json:"travelComponentSeconds,omitempty"`
+	EffectiveFrom          string  `json:"effectiveFrom"`
+	EffectiveTo            *string `json:"effectiveTo,omitempty"`
 }
 
 func toStandardDTO(s *standard.LaborStandard) standardDTO {
 	dto := standardDTO{
-		TaskType:        string(s.TaskType()),
-		ExpectedSeconds: s.ExpectedSeconds(),
-		EffectiveFrom:   s.EffectiveFrom().UTC().Format("2006-01-02T15:04:05Z07:00"),
+		TaskType:               string(s.TaskType()),
+		ExpectedSeconds:        s.ExpectedSeconds(),
+		TravelComponentSeconds: s.TravelComponentSeconds(),
+		EffectiveFrom:          s.EffectiveFrom().UTC().Format("2006-01-02T15:04:05Z07:00"),
 	}
 	if to := s.EffectiveTo(); to != nil {
 		formatted := to.UTC().Format("2006-01-02T15:04:05Z07:00")

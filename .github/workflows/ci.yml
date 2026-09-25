@@ -176,6 +176,62 @@ jobs:
         run: gremlins unleash ./internal/domain --workers 1 --timeout-coefficient 30
 
   # ============================================================
+  # CLASSIFICATION: CONTINUOUS DRIFT (advisory, weekly — never blocks a PR)
+  # Mirrors inventory-storage's `drift` job (already merged there): dead
+  # code, stale go.mod entries, unused frontend exports/files/deps, and a
+  # coverage-quality cross-check (high-coverage functions that still have a
+  # surviving mutant). Weekly + workflow_dispatch only, same gate as the
+  # exhaustive `mutation` job above, so it never runs on a normal push/PR.
+  # ============================================================
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    defaults:
+      run:
+        working-directory: labor-performance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: labor-performance
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: claudioed/warehouse-ui-kit
+          ref: develop
+          path: warehouse-ui-kit
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: labor-performance/go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+      - name: Build warehouse-ui-kit (labor-mfe's local dependency)
+        run: npm ci && npm run build
+        working-directory: warehouse-ui-kit
+      - name: Dead code (go tool deadcode, -test so test-only helpers don't false-positive)
+        run: |
+          go install golang.org/x/tools/cmd/deadcode@v0.35.0
+          echo "### deadcode" >> "$GITHUB_STEP_SUMMARY"
+          deadcode -test ./... | tee -a "$GITHUB_STEP_SUMMARY" || true
+      - name: Unused/stale go.mod entries (go mod tidy -diff)
+        run: |
+          echo "### go mod tidy -diff" >> "$GITHUB_STEP_SUMMARY"
+          go mod tidy -diff | tee -a "$GITHUB_STEP_SUMMARY" || true
+      - name: Unused frontend exports/files/deps (knip)
+        working-directory: labor-performance/web
+        run: |
+          npm ci
+          echo "### knip (web/)" >> "$GITHUB_STEP_SUMMARY"
+          npx knip --no-exit-code | tee -a "$GITHUB_STEP_SUMMARY" || true
+      - name: Coverage quality — high-coverage functions with a surviving mutant
+        run: |
+          go test ./internal/domain/... -coverprofile=/tmp/cov.out -covermode=atomic
+          go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+          gremlins unleash ./internal/domain --workers 1 --timeout-coefficient 30 > /tmp/gremlins.log 2>&1 || true
+          echo "### coverage-quality" >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/coverage-quality.py /tmp/cov.out /tmp/gremlins.log | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ============================================================
   # CLASSIFICATION: LINTERS & STATIC ANALYSIS (API contracts)
   # ============================================================
   api-lint:
@@ -187,7 +243,12 @@ jobs:
         with:
           node-version: "20"
       - name: Install Spectral
-        run: npm install -g @stoplight/spectral-cli@6.16.3
+        # `npm ci` against a pinned local package-lock.json (apis/tooling/)
+        # instead of an unpinned global `npm install -g` -- installs the
+        # CLI into that directory's node_modules and PATH-prefixes it.
+        run: |
+          npm ci --prefix apis/tooling
+          echo "$PWD/apis/tooling/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Lint OpenAPI spec (OLTP API)
         run: spectral lint apis/openapi.yaml --ruleset .spectral.yaml --fail-severity=warn
       - name: Lint OpenAPI spec (reports API)
@@ -221,6 +282,45 @@ jobs:
   # Runs ONLY for a pull_request targeting main -- validated pre-merge,
   # never on develop pushes/PRs or on push-to-main (already validated).
   # ============================================================
+  # ============================================================
+  # CLASSIFICATION: DOCS/API DRIFT
+  # Guards against the generated "API Reference" docs
+  # (docs/docs/api-reference/rest/, produced by docusaurus-plugin-openapi-docs
+  # from apis/openapi.yaml) drifting out of sync with the spec they're
+  # supposed to mirror. Regenerates them exactly as `gen-api-docs:all` would
+  # and fails the PR if that produces any diff -- i.e. someone changed
+  # apis/openapi.yaml or apis/openapi-reports.yaml (or hand-edited the
+  # generated files) without running `npm run gen-api-docs:all` and
+  # committing the result. This repo has TWO specs (OLTP + reports), so
+  # `:all` runs both -- `npm run gen-api-docs all` (passing "all" as a
+  # positional arg to the single-config script) is NOT equivalent, it
+  # silently just regenerates the "labor" config and ignores the extra arg.
+  # ============================================================
+  docs-api-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: docs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - run: npm ci
+      - name: Regenerate REST API docs from apis/openapi.yaml
+        run: npm run clean-api-docs:all && npm run gen-api-docs:all
+      - name: Fail if generated docs differ from what's committed
+        run: |
+          set -euo pipefail
+          if ! git diff --exit-code -- docs/api-reference/rest docs/api-reference/rest-reports; then
+            echo "::error::docs/api-reference/rest docs/api-reference/rest-reports is out of sync with apis/openapi.yaml." \
+                 "Run 'npm run gen-api-docs all' inside docs/ and commit the result."
+            exit 1
+          fi
+
   helm-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -264,6 +364,32 @@ jobs:
   # Runs ONLY for a pull_request targeting main -- validated pre-merge,
   # never on develop pushes/PRs or on push-to-main (already validated).
   # ============================================================
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: labor-performance/web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: labor-performance
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: claudioed/warehouse-ui-kit
+          ref: develop
+          path: warehouse-ui-kit
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+      - run: npm ci && npm run build
+        working-directory: warehouse-ui-kit
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc -b
+      - run: npm test
+      - run: npm run build
+
   trivy-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -275,7 +401,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Build image (local only, not pushed)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: linux/amd64
@@ -346,7 +472,7 @@ jobs:
           cosign sign --yes \
             claudioed/labor-performance@${{ steps.build.outputs.digest }}
       - name: Generate SBOM (SPDX) for the published image
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: claudioed/labor-performance@${{ steps.build.outputs.digest }}
           format: spdx-json

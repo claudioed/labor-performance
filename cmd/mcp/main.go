@@ -82,6 +82,7 @@ func run() error {
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: adapters.performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: adapters.performances},
 		GetStandard:            &usecases.GetStandard{Standards: adapters.standards},
+		GetUtilization:         &usecases.GetUtilization{Performances: adapters.performances, IdlePeriods: adapters.idlePeriods, Clock: memory.SystemClock{}},
 	}
 	server := inboundmcp.NewServer(deps)
 	handler := inboundmcp.Handler(server)
@@ -110,6 +111,7 @@ func run() error {
 type adapterSet struct {
 	standards    ports.StandardRepo
 	performances ports.PerformanceRepo
+	idlePeriods  ports.IdlePeriodRepo
 }
 
 // buildAdapters wires the Postgres repos when DATABASE_URL is set, or falls
@@ -124,6 +126,7 @@ func buildAdapters(ctx context.Context, databaseURL, migrationsPath string, logg
 		return adapterSet{
 			standards:    memory.NewStandardRepo(),
 			performances: memory.NewPerformanceRepo(),
+			idlePeriods:  memory.NewIdlePeriodRepo(),
 		}, noop, nil
 	}
 
@@ -139,6 +142,7 @@ func buildAdapters(ctx context.Context, databaseURL, migrationsPath string, logg
 	return adapterSet{
 		standards:    postgres.NewStandardRepo(pool),
 		performances: postgres.NewPerformanceRepo(pool),
+		idlePeriods:  postgres.NewIdlePeriodRepo(pool),
 	}, pool.Close, nil
 }
 

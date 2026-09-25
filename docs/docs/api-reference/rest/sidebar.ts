@@ -52,6 +52,28 @@ const sidebar: SidebarsConfig = {
     },
     {
       type: "category",
+      label: "utilization",
+      link: {
+        type: "doc",
+        id: "api-reference/rest/utilization",
+      },
+      items: [
+        {
+          type: "doc",
+          id: "api-reference/rest/get-task-type-utilization",
+          label: "Get fleet-wide idle-gap / utilization for a TaskType over a trailing window",
+          className: "api-method get",
+        },
+        {
+          type: "doc",
+          id: "api-reference/rest/get-associate-utilization",
+          label: "Get one associate's idle-gap / utilization over a trailing window",
+          className: "api-method get",
+        },
+      ],
+    },
+    {
+      type: "category",
       label: "health",
       link: {
         type: "doc",

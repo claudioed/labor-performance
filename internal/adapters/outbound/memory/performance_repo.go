@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/domain/performance"
@@ -152,4 +153,42 @@ func (r *PerformanceRepo) RecentByAssociateID(_ context.Context, associateId sha
 		matches = matches[:limit]
 	}
 	return matches, nil
+}
+
+// SumActualSecondsByTaskType returns the total ActualSeconds across rows
+// for taskType whose CompletedAt is on or after since.
+func (r *PerformanceRepo) SumActualSecondsByTaskType(_ context.Context, taskType shared.TaskType, since time.Time) (int64, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var sum int64
+	for _, p := range r.byTID {
+		if p.TaskType() != taskType {
+			continue
+		}
+		if p.CompletedAt().Before(since) {
+			continue
+		}
+		sum += p.ActualSeconds()
+	}
+	return sum, nil
+}
+
+// SumActualSecondsByAssociate is SumActualSecondsByTaskType's
+// per-associate counterpart.
+func (r *PerformanceRepo) SumActualSecondsByAssociate(_ context.Context, associateId shared.AssociateId, since time.Time) (int64, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var sum int64
+	for _, p := range r.byTID {
+		if p.AssociateId() != associateId {
+			continue
+		}
+		if p.CompletedAt().Before(since) {
+			continue
+		}
+		sum += p.ActualSeconds()
+	}
+	return sum, nil
 }
