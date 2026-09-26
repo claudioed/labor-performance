@@ -11,7 +11,7 @@ description: What the Labor Performance bounded context is, what it owns, and wh
 This documentation site is an educational Domain-Driven Design exercise. It
 follows real industry-standard patterns and terminology, but it is **not a
 production system** and is **not affiliated with, endorsed by, or
-representative of Amazon, Manhattan Associates, Blue Yonder, or any other
+representative of any real-world
 company**.
 :::
 
