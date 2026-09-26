@@ -20,8 +20,10 @@ https://claudioed.github.io/labor-performance/
    fan-out with `wes-work-planning`) and reacts only to `TaskCompleted`. It
    is a separate Go module/repo: **no Go import from, and no write access
    to**, `fulfillment-execution` or `workforce-management`. It never calls
-   either sibling synchronously — choreography, not orchestration. See
-   `.claude/rules/domain-model.md` and ADR 0002/0003.
+   ANY sibling context over REST or MCP — choreography, not orchestration
+   (ADR 0015 restates this for facility-layout). Siblings may read this
+   context's own surfaces and consume its integration topic. See
+   `.claude/rules/domain-model.md` and ADR 0002/0003/0013.
 2. **Hexagonal / ports & adapters, strict inward dependency rule:** domain
    depends on nothing; application depends on domain; adapters depend on
    application/domain. No framework, HTTP, Kafka, or SQL types in the domain
@@ -37,19 +39,25 @@ https://claudioed.github.io/labor-performance/
 ## Project overview
 
 - Go 1.26, module `github.com/claudioed/labor-performance`.
-- Three processes, one writer per database (ADR 0007, ADR 0010):
-  - `cmd/labor` — OLTP: REST API + Kafka consumer of `TaskCompleted`.
+- Four processes, one writer per database (ADR 0007, ADR 0009, ADR 0010):
+  - `cmd/labor` — OLTP: REST API + Kafka consumer of `TaskCompleted` +
+    outbox relay (publishes to the analytics and integration topics).
   - `cmd/labor-projector` — analytics writer; consumes
     `warehouse.labor-performance.analytics`, the ONLY writer of the
     analytical DB.
   - `cmd/labor-reports` — analytics reader; read-only pool; serves
-    `GET /reports/performance`.
+    `GET /reports/performance[/freshness]`.
+  - `cmd/mcp` — MCP server (Streamable HTTP, `:8090`), four read-only
+    tools over the OLTP store.
 - Two OpenAPI specs (`apis/openapi.yaml` OLTP, `apis/openapi-reports.yaml`
-  reports) and one AsyncAPI spec (`apis/asyncapi.yaml`, documents both what
-  this service consumes and what it publishes to its own analytics topic).
+  reports) and one AsyncAPI spec (`apis/asyncapi.yaml`, documents what this
+  service consumes and what it publishes to its analytics topic and its
+  integration topic `warehouse.labor-performance.events`, ADR 0013).
+- No REST or MCP surface is authenticated (ADR 0012 removed ADR 0011's
+  bearer-key layer).
 - `charts/labor-performance/` — Helm chart, fleet parity.
-- `web/` — the `labor-mfe` micro-frontend remote (module federation, React,
-  Vite) consuming `@warehouse/ui-kit`.
+- `web/` — the `labor_mfe` micro-frontend remote (module federation, React,
+  Vite) consuming `@warehouse/ui-kit`; mounted by the console at `/labor`.
 - `docs/` — Docusaurus site (see `.claude/rules/docs-and-api-drift.md`).
 
 ## Architecture
@@ -58,16 +66,20 @@ https://claudioed.github.io/labor-performance/
 cmd/labor/                    main.go — OLTP composition root
 cmd/labor-projector/          main.go — analytics WRITER (only writer of the analytical DB)
 cmd/labor-reports/            main.go — analytics READER (read-only pool)
+cmd/mcp/                      main.go — MCP server (read-only tools, ADR 0009)
 internal/
   domain/
     standard/                 LaborStandard aggregate: TaskType -> expected duration
+                                (+ optional TravelComponentSeconds, ADR 0015)
     performance/               TaskPerformance aggregate: one scored completed task
+    idleness/                  IdlePeriod aggregate: between-task idle gap (ADR 0014)
     shared/                    value objects: TaskType, AssociateId, events, errors
   application/
-    ports/                     OUT: StandardRepo, PerformanceRepo, ProcessedEvents, EventPublisher, Clock
+    ports/                     OUT: StandardRepo, PerformanceRepo, IdlePeriodRepo, ProcessedEvents,
+                                EventPublisher, UnitOfWork, Clock
     usecases/                  DefineStandard, GetStandard, RecordTaskPerformance
                                 (Kafka-consumer-driven), GetAssociateScorecard,
-                                GetTaskTypePerformance
+                                GetTaskTypePerformance, GetUtilization
   analytics/
     report/                    Analytical read model (ADR 0007) — depends on NOTHING;
                                 OLTP layers must not import it and vice versa (arch-go enforced)
@@ -76,16 +88,18 @@ internal/
                                  reports_handler.go serves the analytics read model
     inbound/kafka/               consumer.go (warehouse.fulfillment.events, TaskCompleted only)
                                   analytics_consumer.go (warehouse.labor-performance.analytics)
+    inbound/mcp/                 MCP tools, resource template, prompt, governance test
     outbound/postgres/          pgxpool repos + golang-migrate; unit_of_work.go,
                                  outbox_publisher.go, outbox_relay.go (transactional outbox, ADR 0010)
     outbound/analyticsstore/    analytical DB: writer projection, read-only reader, in-memory store
     outbound/memory/            in-memory repos for tests/local
     outbound/events/            log publisher (default)
-    outbound/kafka/              analytics publisher, relay sink, fan-out (EVENT_PUBLISHER=kafka)
+    outbound/kafka/              analytics + integration publishers, relay sink, fan-out
+                                 (EVENT_PUBLISHER=kafka)
     outbound/telemetry/         OTel traces/metrics/logs
 migrations/                    golang-migrate SQL (OLTP schema)
 migrations/analytics/          golang-migrate SQL (analytical schema)
-apis/openapi.yaml               OLTP REST API (5 endpoints)
+apis/openapi.yaml               OLTP REST API (6 endpoints + /healthz)
 apis/openapi-reports.yaml       Reports REST API (ADR 0007)
 apis/asyncapi.yaml               Consumed + published event contracts
 docs/docs/adr/                  ADRs (Nygard format), Docusaurus-rendered
@@ -104,7 +118,7 @@ go run ./cmd/labor
 
 # With Postgres
 docker compose up -d postgres                 # :5435
-export DATABASE_URL='postgres://labor:***@localhost:5435/labor?sslmode=disable'
+export DATABASE_URL='postgres://labor:labor@localhost:5435/labor?sslmode=disable'
 go run ./cmd/labor                            # migrations run automatically
 
 # Quality gate (mirrors .github/workflows/ci.yml)
@@ -115,6 +129,7 @@ make check-all   # check + coverage (gate: 90%) + arch-test + bdd
 go test ./... -run TestFeatures -v                    # BDD (godog/Gherkin)
 go test ./internal/architecture/... -v                 # arch-fitness (arch-go)
 go test -tags=integration ./... -race -count=1         # Postgres + Kafka (testcontainers) integration
+make integration-kafka-testcontainers                  # just the Kafka consumer test
 gremlins unleash ./internal/domain                      # mutation testing
 spectral lint apis/openapi.yaml --ruleset .spectral.yaml --fail-severity=warn
 spectral lint apis/openapi-reports.yaml --ruleset .spectral.yaml --fail-severity=warn
@@ -122,7 +137,8 @@ spectral lint apis/asyncapi.yaml --ruleset .spectral.asyncapi.yaml --fail-severi
 ct lint --charts charts/labor-performance --validate-maintainers=false --check-version-increment=false
 
 # Docs site (see .claude/rules/docs-and-api-drift.md before regenerating)
-cd docs && npm ci && npm run gen-api-docs:all && npm run build
+cd docs && npm ci && npm run typecheck && npm run build
+npm run clean-api-docs:all && npm run gen-api-docs:all   # what CI's docs-api-drift job runs
 ```
 
 `lefthook install` wires `pre-commit` (fmt-check/vet/lint) and `pre-push`
@@ -144,8 +160,9 @@ cd docs && npm ci && npm run gen-api-docs:all && npm run build
 - CI (`.github/workflows/ci.yml`) runs the full fleet-standard matrix: lint,
   test, bdd, integration, mutation-fast (blocking) / mutation (scheduled
   exhaustive), api-lint (Spectral, all 3 specs), vuln (govulncheck),
-  helm-lint, arch-test, trivy-scan, docker-publish + release (main-only).
-  Plus `codeql.yml` and `scorecard.yml`.
+  arch-test, web, docs-api-drift, drift (scheduled/manual report),
+  helm-lint + trivy-scan (PRs into `main`), docker-publish + release
+  (main-only). Plus `codeql.yml`, `scorecard.yml` and `docs.yml` (Pages).
 
 ## Git workflow
 
@@ -166,5 +183,5 @@ cd docs && npm ci && npm run gen-api-docs:all && npm run build
   Docusaurus `docusaurus-plugin-openapi-docs` wiring for both, the
   `@faker-js/faker` / `postman-collection` pitfall, and the docs.yml
   trigger-branch gap.
-- `.claude/rules/adrs-and-decisions.md` — index of ADRs 0001–0012 and what
+- `.claude/rules/adrs-and-decisions.md` — index of ADRs 0001–0015 and what
   each one settles.
