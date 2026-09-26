@@ -44,40 +44,53 @@ pattern already in this fleet. See
 
 This build is **100% additive** from `fulfillment-execution`'s point of
 view — the sibling `feature/labor-performance-hooks` PR in that repo
-already carries everything this service needs
-(`associate_id`, `duration_seconds`) on the existing `TaskCompleted`
-event; nothing else in that repository is touched.
+already carries `associate_id` and `duration_seconds` on the existing
+`TaskCompleted` event, and fulfillment-execution ADR-0023 later added
+`task_type`; nothing else in that repository is touched.
 
 This context DOES expose its own REST API (to configure standards and
 read performance scores) — that is this context's OWN Open Host Service,
-symmetric with every other context in the fleet.
+symmetric with every other context in the fleet. It also publishes its own
+integration event, `TaskPerformanceRecorded`, on
+`warehouse.labor-performance.events`
+([ADR 0013](docs/docs/adr/0013-labor-performance-integration-events.md)),
+which `workforce-management` consumes as its measured-rate cache. Every
+integration is inbound or published: this service makes **no** outbound
+REST or MCP call to any sibling context
+([ADR 0015](docs/docs/adr/0015-optional-travel-component-on-labor-standard.md)
+restates that boundary).
 
 ## Architecture
 
 Hexagonal (ports & adapters), with a strict inward-only dependency rule —
 **domain depends on nothing; application depends on domain; adapters
-depend on application/domain** — identical in shape to the other six
+depend on application/domain** — identical in shape to the other
 services in the fleet. See
 [ADR 0001](docs/docs/adr/0001-hexagonal-ports-and-adapters.md).
 
 ```
-cmd/labor/                        main.go — the OLTP composition root
+cmd/labor/                        main.go — the OLTP composition root (REST +
+                                   Kafka consumer + outbox relay)
 cmd/labor-projector/              main.go — analytics WRITER (the only writer of
                                    the analytical DB); consumes the analytics
                                    topic from FirstOffset, runs its migrations
 cmd/labor-reports/                main.go — analytics READER (read-only pool);
-                                   serves GET /reports/performance
+                                   serves GET /reports/performance[/freshness]
+cmd/mcp/                          main.go — MCP server (Streamable HTTP, read-only
+                                   tools; ADR 0009)
 internal/
   domain/
     standard/                     LaborStandard aggregate: TaskType -> expected duration
+                                   (+ optional TravelComponentSeconds, ADR 0015)
     performance/                  TaskPerformance aggregate: one scored completed task
+    idleness/                     IdlePeriod aggregate: between-task idle gap (ADR 0014)
     shared/                       TaskType, AssociateId, domain events, errors
   application/
-    ports/                        OUT: StandardRepo, PerformanceRepo, ProcessedEvents,
-                                   EventPublisher, Clock
+    ports/                        OUT: StandardRepo, PerformanceRepo, IdlePeriodRepo,
+                                   ProcessedEvents, EventPublisher, UnitOfWork, Clock
     usecases/                     DefineStandard, GetStandard, RecordTaskPerformance
                                    (Kafka-consumer-driven), GetAssociateScorecard,
-                                   GetTaskTypePerformance
+                                   GetTaskTypePerformance, GetUtilization
   analytics/
     report/                       ANALYTICAL read model (ADR 0007) — depends on
                                    NOTHING; the OLTP layers must not import it
@@ -89,6 +102,8 @@ internal/
                                                        (TaskCompleted only, OLTP)
                                    analytics_consumer.go — warehouse.labor-performance
                                                        .analytics (projector)
+    inbound/mcp/                  MCP tools, resource template, prompt (cmd/mcp)
+    kafka/                        envelope (topic/event-type constants), otelkafka
     outbound/postgres/            pgxpool repos + golang-migrate runner (OLTP DB);
                                    unit_of_work.go, outbox_publisher.go, outbox_relay.go
                                    — the transactional outbox (ADR 0010)
@@ -96,24 +111,26 @@ internal/
                                    reader, in-memory store for tests
     outbound/memory/              in-memory repos for tests/local
     outbound/events/              log publisher (the default)
-    outbound/kafka/               analytics publisher (Encode + Publish), relay sink,
+    outbound/kafka/               analytics + integration publishers, relay sink,
                                    fan-out (EVENT_PUBLISHER=kafka)
     outbound/telemetry/           OTel traces/metrics/logs (copied from workforce-management)
 migrations/                       golang-migrate SQL files (OLTP schema)
 migrations/analytics/             golang-migrate SQL files (analytical schema)
-apis/openapi.yaml                 This service's OWN OLTP REST API (5 endpoints)
+apis/openapi.yaml                 This service's OWN OLTP REST API (6 endpoints + /healthz)
 apis/openapi-reports.yaml         The read-only reports API (ADR 0007)
 apis/asyncapi.yaml                What this service SUBSCRIBES TO and PUBLISHES
 docker-compose.yml                Local Postgres 16 (OLTP :5435, analytics :5436)
 docs/docs/adr/                    Architecture Decision Records
 ```
 
-**Three processes, one writer.** The analytical data product added in
-[ADR 0007](docs/docs/adr/0007-analytical-data-product.md) splits into
-`cmd/labor` (OLTP), `cmd/labor-projector` (the only writer of the
+**Four processes, one writer per database.** The analytical data product
+added in [ADR 0007](docs/docs/adr/0007-analytical-data-product.md) splits
+into `cmd/labor` (OLTP), `cmd/labor-projector` (the only writer of the
 analytical database) and `cmd/labor-reports` (read-only). They share no
 database connection: report query load can never contend with the
-transactional path that ingests `TaskCompleted`.
+transactional path that ingests `TaskCompleted`. `cmd/mcp`
+([ADR 0009](docs/docs/adr/0009-mcp-inbound-adapter.md)) is a fourth,
+read-only deployable over the OLTP database.
 
 The domain layer is pure Go: no `chi`, no `pgx`, no `kafka-go`. No JSON
 struct tags in the domain packages.
@@ -147,11 +164,18 @@ struct tags in the domain packages.
   `EVENT_PUBLISHER=kafka`, a use case's Saves, the `processed_events`
   marker and the analytics event are one transaction: the event goes into
   an `outbox_events` row, and an in-process relay ships it to
-  `warehouse.labor-performance.analytics` within `OUTBOX_RELAY_INTERVAL`.
-  The OLTP store and the analytics topic can no longer diverge, and a
+  `warehouse.labor-performance.analytics` and
+  `warehouse.labor-performance.events` within `OUTBOX_RELAY_INTERVAL`.
+  The OLTP store and the topics can no longer diverge, and a
   consumer redelivery after a partial failure is scored rather than
   dropped as a duplicate. See
   [ADR 0010](docs/docs/adr/0010-transactional-outbox.md).
+- **Idle gaps are derived, never invented.** Each consumed `TaskCompleted`
+  derives the associate's idle gap since their previous completion
+  (`claimedAt = occurred_at − duration_seconds`), capped at
+  `IDLE_GAP_CAP_SECONDS`, in the same unit of work as the performance row.
+  A still-running "open gap" is computed at read time only. See
+  [ADR 0014](docs/docs/adr/0014-labor-utilization-idleness.md).
 
 ## Running locally
 
@@ -205,16 +229,16 @@ surface (`kafka.enabled`, `otel.enabled`, ingress, autoscaling, an
 ### 5. Kafka consumer smoke test against the shared broker
 
 ```bash
-# From the workspace root, start the fleet's shared Kafka broker:
-docker compose -f ../docker-compose.kafka.yml up -d
-
+# The fleet runs ONE Kafka broker: the in-cluster broker deployed by
+# warehouse-infra, whose external listener is reachable from the host at
+# localhost:9092 (this repo's docker-compose.yml has no Kafka service).
 export KAFKA_BROKERS=localhost:9092
 export KAFKA_CONSUMER_GROUP=labor-performance
 go run ./cmd/labor
 
 # In another terminal, publish a TaskCompleted-shaped message using any
 # Kafka producer CLI, e.g. kcat:
-echo '{"event_id":"'$(uuidgen)'","event_type":"TaskCompleted","occurred_at":"2026-08-29T22:00:00Z","source":"fulfillment-execution","data":{"task_id":"task-1","station_id":"station-1","work_unit_id":"wu-1","associate_id":"assoc-1","duration_seconds":52}}' \
+echo '{"event_id":"'$(uuidgen)'","event_type":"TaskCompleted","occurred_at":"2026-08-29T22:00:00Z","source":"fulfillment-execution","data":{"task_id":"task-1","station_id":"station-1","work_unit_id":"wu-1","associate_id":"assoc-1","duration_seconds":52,"task_type":"PICK"}}' \
   | kcat -P -b localhost:9092 -t warehouse.fulfillment.events
 
 # Then verify it was recorded:
@@ -223,6 +247,8 @@ curl -s localhost:8080/associates/assoc-1/scorecard
 
 ### Configuration
 
+`cmd/labor` (OLTP):
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HTTP_ADDR` | `:8080` | Listen address. |
@@ -230,25 +256,58 @@ curl -s localhost:8080/associates/assoc-1/scorecard
 | `MIGRATIONS_PATH` | `migrations` | golang-migrate source directory. |
 | `KAFKA_BROKERS` | `localhost:9092` | Comma-separated broker addresses. |
 | `KAFKA_CONSUMER_GROUP` | `labor-performance` | Consumer group id on `warehouse.fulfillment.events`. |
-| `EVENT_PUBLISHER` | `log` | `log` or `kafka`. With `kafka`, domain events are fanned onto `warehouse.labor-performance.analytics`; when `DATABASE_URL` is also set they go through the transactional outbox (`outbox_events` + in-process relay, [ADR 0010](docs/docs/adr/0010-transactional-outbox.md)), otherwise straight to the broker. |
+| `EVENT_PUBLISHER` | `log` | `log` or `kafka`. With `kafka`, domain events are fanned onto `warehouse.labor-performance.analytics` and `warehouse.labor-performance.events` (ADR 0013); when `DATABASE_URL` is also set they go through the transactional outbox (`outbox_events` + in-process relay, [ADR 0010](docs/docs/adr/0010-transactional-outbox.md)), otherwise straight to the broker. |
 | `OUTBOX_RELAY_INTERVAL` | `1s` | How long the outbox relay sleeps between passes that found nothing to publish (Go duration; only used in outbox mode). |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:5187` | Comma-separated allowed origins. |
+| `IDLE_GAP_CAP_SECONDS` | `3600` | Upper bound on a recorded idle gap (a capped gap is stored with `capped: true`); malformed/non-positive values fall back to the default ([ADR 0014](docs/docs/adr/0014-labor-utilization-idleness.md)). |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:5187` | Comma-separated allowed origins (also read by `cmd/labor-reports`). |
 | `OTEL_SERVICE_NAME` | `labor-performance` | OTel `service.name` resource attribute. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP/gRPC Collector endpoint. |
+| `SERVICE_VERSION` | `dev` | OTel `service.version` (overridden by `-ldflags -X main.version`). |
+| `ENVIRONMENT` | `local` | OTel `deployment.environment.name` resource attribute. |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
+
+The other binaries read the same `LOG_LEVEL`/`OTEL_*`/`SERVICE_VERSION` set, plus:
+
+| Binary | Variable | Default | Purpose |
+| --- | --- | --- | --- |
+| `cmd/labor-projector` | `ANALYTICS_DATABASE_URL` | *(required)* | Analytical Postgres DSN (the only writer). |
+| `cmd/labor-projector` | `ANALYTICS_MIGRATIONS_PATH` | `migrations/analytics` | Analytical schema migrations. |
+| `cmd/labor-projector` | `KAFKA_BROKERS` | `localhost:9092` | Broker for `warehouse.labor-performance.analytics`. |
+| `cmd/labor-projector` | `ADMIN_ADDR` | `:8091` | `/healthz` listener. |
+| `cmd/labor-reports` | `ANALYTICS_DATABASE_URL` | *(required)* | Analytical Postgres DSN (read-only pool). |
+| `cmd/labor-reports` | `HTTP_ADDR` | `:8092` | Reports API listener. |
+| `cmd/mcp` | `MCP_ADDR` | `:8090` | Streamable HTTP listener. |
+| `cmd/mcp` | `DATABASE_URL` / `MIGRATIONS_PATH` | *(unset)* / `migrations` | Same OLTP store as `cmd/labor`; unset ⇒ in-memory. |
 
 ## API
 
-Four endpoints plus a liveness probe. The full contract, including the RFC
+Six endpoints plus a liveness probe. The full contract, including the RFC
 7807 error schema, is in [`apis/openapi.yaml`](apis/openapi.yaml).
 
 | Method | Path | Use case |
 | --- | --- | --- |
-| `POST` | `/standards` | DefineStandard |
+| `POST` | `/standards` | DefineStandard (optional `travelComponentSeconds`, ADR 0015) |
 | `GET` | `/standards/{taskType}` | GetStandard |
 | `GET` | `/associates/{associateId}/scorecard` | GetAssociateScorecard |
 | `GET` | `/task-types/{taskType}/performance` | GetTaskTypePerformance |
+| `GET` | `/task-types/{taskType}/utilization?window=1h` | GetUtilization (ADR 0014) |
+| `GET` | `/associates/{associateId}/utilization?window=1h` | GetUtilization (ADR 0014) |
 | `GET` | `/healthz` | Liveness probe |
+
+The read-only reports API (`cmd/labor-reports`,
+[`apis/openapi-reports.yaml`](apis/openapi-reports.yaml)) serves
+`GET /reports/performance`, `GET /reports/performance/freshness` and
+`GET /healthz`.
+
+The MCP server (`cmd/mcp`) exposes four read-only tools —
+`get_associate_scorecard`, `get_task_type_performance`,
+`get_labor_standard`, `get_task_type_utilization` — plus the
+`scorecard://labor/{associateId}` resource template and the
+`review_associate_performance` prompt. No write tool is registered.
+
+None of these surfaces is authenticated: the bearer-key layer from
+[ADR 0011](docs/docs/adr/0011-rest-auth-static-bearer-scopes.md) was removed by
+[ADR 0012](docs/docs/adr/0012-remove-rest-auth-layer.md).
 
 There is deliberately **no** REST endpoint for `RecordTaskPerformance` —
 it is exclusively Kafka-consumer-driven (see
@@ -330,7 +389,7 @@ same feedback CI gives you post-push is available locally, pre-commit:
 
 ```bash
 make check       # fmt-check + vet + build + lint + test -race
-make check-all   # check + coverage (gate: 90% on domain + application)
+make check-all   # check + coverage (gate: 90% on domain + application + analytics) + arch-test + bdd
 ```
 
 | Target | What it runs |
@@ -341,20 +400,24 @@ make check-all   # check + coverage (gate: 90% on domain + application)
 | `lint` | `golangci-lint run ./...` (CI pins `v2.13.1`) |
 | `test` | `go test ./... -race` |
 | `coverage` | coverage profile + the 90% gate |
-| `integration-kafka` | Build-tagged consumer test against a real broker (`KAFKA_BROKERS` required) |
+| `bdd` / `arch-test` | godog acceptance tests / arch-go fitness tests |
+| `mutation-fast` / `mutation` | gremlins on `./internal/domain/performance` / `./internal/domain` |
+| `vuln` / `api-lint` | govulncheck / Spectral on all three specs |
+| `integration-kafka-testcontainers` | Build-tagged consumer test against a Testcontainers Kafka broker (needs Docker only) |
 
 Additional verification surfaces, each with its own CI job:
 
 ```bash
 go test ./... -run TestFeatures -v                  # BDD (godog/Gherkin)
 go test ./internal/architecture/... -v               # arch-fitness (arch-go)
-go test -tags=integration ./... -race -count=1       # Postgres + Kafka integration
+go test -tags=integration ./... -race -count=1       # Postgres + Kafka integration (testcontainers)
 go test -tags=integration ./internal/adapters/outbound/postgres/ -run Outbox -race -count=1
                                                      # outbox: testcontainers Postgres, needs Docker only
 gremlins unleash ./internal/domain                    # mutation testing (see .gremlins.yaml)
 ct lint --charts charts/labor-performance \
   --validate-maintainers=false --check-version-increment=false
 spectral lint apis/openapi.yaml --ruleset .spectral.yaml --fail-severity=warn
+spectral lint apis/openapi-reports.yaml --ruleset .spectral.yaml --fail-severity=warn
 spectral lint apis/asyncapi.yaml --ruleset .spectral.asyncapi.yaml --fail-severity=warn
 ```
 
@@ -369,14 +432,18 @@ lefthook install
 
 CI (`.github/workflows/ci.yml`) runs the full fleet-standard matrix:
 **`lint`**, **`test`**, **`bdd`**, **`integration`** (Postgres service
-container), **`mutation-fast`** (blocking, `./internal/domain/performance`)
-and **`mutation`** (exhaustive, scheduled/manual, `./internal/domain`),
-**`api-lint`** (Spectral against both `apis/openapi.yaml` and
-`apis/asyncapi.yaml`), **`vuln`** (govulncheck), **`helm-lint`**
-(`ct lint`), **`arch-test`** (arch-go fitness tests), **`trivy-scan`**
-(container CVE gate on every push/PR), **`docker-publish`** (main-only,
-cosign keyless signing + SPDX SBOM attestation), and **`release`**
-(main-only, auto-tagged GitHub release + published Helm chart). Plus
+container + testcontainers), **`mutation-fast`** (blocking,
+`./internal/domain/performance`) and **`mutation`** (exhaustive,
+scheduled/manual, `./internal/domain`), **`api-lint`** (Spectral against
+`apis/openapi.yaml`, `apis/openapi-reports.yaml` and `apis/asyncapi.yaml`),
+**`vuln`** (govulncheck), **`arch-test`** (arch-go fitness tests),
+**`web`** (lint/typecheck/test/build of `web/`), **`docs-api-drift`**
+(regenerates both generated API references and fails on any diff),
+**`drift`** (scheduled/manual dead-code and coverage-quality report),
+**`helm-lint`** (`ct lint`) and **`trivy-scan`** (container CVE gate) on
+pull requests into `main`, **`docker-publish`** (main-only, cosign
+keyless signing + SPDX SBOM attestation), and **`release`** (main-only,
+auto-tagged GitHub release + published Helm chart). Plus
 `.github/workflows/codeql.yml` (security-extended CodeQL analysis) and
 `.github/workflows/scorecard.yml` (OpenSSF Scorecard).
 
@@ -395,10 +462,6 @@ The following are **deliberately out of scope**. They are listed so an
 absence is never mistaken for an oversight — each is a decision, not a gap
 someone forgot about.
 
-- **`labor-mfe` micro-frontend remote.** CORS is added now (proactively,
-  matching the fleet's convention that CORS ships alongside a service's
-  first console-facing REST surface); the actual screen is a separate,
-  later PR.
 - **Automatic pay-for-performance / bonus calculation.** A real Manhattan
   competitor feature, explicitly out of scope — this context surfaces the
   number, a human/other system decides what to do with it.
@@ -409,17 +472,6 @@ someone forgot about.
   Scorecard read model, a human reads it); an active workflow that
   automatically messages, schedules, or nudges an associate based on
   that signal remains deferred.
-- **Publishing `LaborStandardDefined`/`LaborStandardRevised`/
-  `TaskPerformanceRecorded` to Kafka for other services to consume.** Log
-  publisher only, no integration contract yet — no other repo needs these
-  events today. `apis/asyncapi.yaml` documents only what this service
-  CONSUMES, not what it would publish.
-- **MCP inbound adapter.** HTTP and Kafka are the only inbound adapters.
-- **Per-service analytics data-mesh** (a separate analytics topic,
-  analytical Postgres, and projector/reports binaries, as several sibling
-  services now have). This service's OLTP write path already IS the
-  analytics-relevant signal (`TaskPerformance` rows); a dedicated
-  analytics side-projection is a natural but deferred fast-follow.
 - **Any change to `fulfillment-execution` beyond what
   `feature/labor-performance-hooks` already does.** This build is 100%
   additive from that repo's point of view.
@@ -451,6 +503,17 @@ and have since been added, bringing this service to full fleet parity with
   `oci://ghcr.io/claudioed`.
 - **Full Docusaurus documentation site**, live at
   https://claudioed.github.io/labor-performance/.
+- **`labor-mfe` micro-frontend remote** (`web/`) — see
+  [Operator micro-frontend](#operator-micro-frontend-web) below.
+- **Per-service analytical data product** — analytics topic, analytical
+  Postgres, `cmd/labor-projector` + `cmd/labor-reports`
+  ([ADR 0007](docs/docs/adr/0007-analytical-data-product.md)).
+- **MCP inbound adapter** — `cmd/mcp`
+  ([ADR 0009](docs/docs/adr/0009-mcp-inbound-adapter.md)).
+- **Integration event** — `TaskPerformanceRecorded` on
+  `warehouse.labor-performance.events`, consumed by
+  `workforce-management`
+  ([ADR 0013](docs/docs/adr/0013-labor-performance-integration-events.md)).
 
 ## Architecture Decision Records
 
@@ -458,15 +521,23 @@ and have since been added, bringing this service to full fleet parity with
 2. [0002 — A new bounded context, not an extension of workforce-management or fulfillment-execution](docs/docs/adr/0002-new-bounded-context-not-extension-of-workforce-or-fulfillment.md)
 3. [0003 — Kafka choreography consumer of fulfillment-execution, no REST dependency](docs/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution.md)
 4. [0004 — StandardSecondsAtCompletion is frozen at ingestion time, never recomputed](docs/docs/adr/0004-standard-frozen-at-completion-time-not-recomputed.md)
+5. [0005 — Associate Trend and CoachingFlag on the Scorecard read model](docs/docs/adr/0005-associate-trend-and-coaching-flag.md)
+6. [0006 — MeanActualSeconds on TaskTypePerformance, independent of any standard](docs/docs/adr/0006-mean-actual-seconds-independent-of-standard.md)
+7. [0007 — Per-service analytical data product (the Labor Performance Report)](docs/docs/adr/0007-analytical-data-product.md)
+8. [0008 — Standard metrics convention across the fleet](docs/docs/adr/0008-standard-metrics-convention.md)
+9. [0009 — Model Context Protocol as an inbound adapter, not a new service](docs/docs/adr/0009-mcp-inbound-adapter.md)
 10. [0010 — Transactional outbox for the analytics topic](docs/docs/adr/0010-transactional-outbox.md)
 11. [0011 — REST identity: fleet-standard static bearer keys with read/read-write scopes (superseded by 0012)](docs/docs/adr/0011-rest-auth-static-bearer-scopes.md)
 12. [0012 — Remove the REST/MCP identity layer](docs/docs/adr/0012-remove-rest-auth-layer.md)
+13. [0013 — Labor performance publishes an integration event](docs/docs/adr/0013-labor-performance-integration-events.md)
+14. [0014 — Measuring idleness and utilization](docs/docs/adr/0014-labor-utilization-idleness.md)
+15. [0015 — Optional travel-time component on a LaborStandard](docs/docs/adr/0015-optional-travel-component-on-labor-standard.md)
 
-The full, current list (0001–0012) is in [docs/docs/adr/about.md](docs/docs/adr/about.md).
+The same list, with statuses, is in [docs/docs/adr/about.md](docs/docs/adr/about.md).
 
 ## License
 
-MIT (or match the other repos' licensing — TBD).
+MIT — see [LICENSE](LICENSE).
 
 ## Operator micro-frontend (`web/`)
 

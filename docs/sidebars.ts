@@ -9,8 +9,8 @@ import apiReportsSidebar from './docs/api-reference/rest-reports/sidebar';
 /**
  * Top-level categories mirror the shape shared across warehouse-systems
  * documentation sites: Overview, Business Context, Domain-Driven Design,
- * API Reference, API Reference (Reports), Ecosystem, Architecture Decision
- * Records.
+ * API Reference, API Reference (Reports), Ecosystem, MCP governance,
+ * Architecture Decision Records.
  */
 const sidebars: SidebarsConfig = {
   docsSidebar: [
@@ -30,6 +30,7 @@ const sidebars: SidebarsConfig = {
       items: [...apiReportsSidebar],
     },
     'ecosystem/context-map',
+    'mcp/governance-charter',
     {
       type: 'category',
       label: 'Architecture Decision Records',

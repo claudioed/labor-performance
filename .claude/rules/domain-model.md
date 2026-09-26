@@ -29,26 +29,32 @@ configures — it does not define the fulfillment work itself.
   `event_type == "TaskCompleted"` is acted on; every other type is silently
   skipped, not an error.
 - Separate Go module/repo: no Go import from and no write access to
-  `fulfillment-execution` or `workforce-management`'s aggregates. No REST
-  dependency on either — everything needed (`AssociateId`, `TaskType`,
-  `DurationSeconds`) already travels on the Kafka event.
-- This context DOES expose its own REST Open Host Service (standards +
-  performance reads), symmetric with every other fleet context. CORS is
-  wired proactively for the future `labor-mfe` remote.
-- No relationship at all to `workforce-management` — different concepts
-  entirely, zero Go-import and zero REST dependency.
+  `fulfillment-execution` or `workforce-management`'s aggregates. No
+  outbound REST or MCP call to ANY sibling context — everything needed
+  (`AssociateId`, `TaskType`, `DurationSeconds`) already travels on the
+  Kafka event.
+- This context DOES expose its own Open Host Services: the OLTP REST API,
+  the reports API (`cmd/labor-reports`) and the MCP server (`cmd/mcp`).
+  The `labor_mfe` remote in `web/` calls the OLTP API; `warehouse-ops-agent`
+  reads the MCP server and the reports API.
+- `workforce-management` is a downstream Customer: it consumes this
+  context's `TaskPerformanceRecorded` integration event on
+  `warehouse.labor-performance.events` (ADR 0013). This context has zero
+  Go-import, REST or Kafka dependency on `workforce-management`.
 
-See ADR 0002, ADR 0003.
+See ADR 0002, ADR 0003, ADR 0013, ADR 0015.
 
 ## Ubiquitous language
 
 | Term | Meaning |
 | --- | --- |
-| **LaborStandard** | Aggregate root: expected duration for a `TaskType` (PICK/PACK/SLAM — mirrors `fulfillment-execution`'s `task.Type` exactly), with append-only revision history. `ExpectedSeconds` must be > 0. ONE active standard per TaskType at any time. |
+| **LaborStandard** | Aggregate root: expected duration for a `TaskType` (PICK/PACK/SLAM — mirrors `fulfillment-execution`'s `task.Type` exactly), with append-only revision history. `ExpectedSeconds` must be > 0. ONE active standard per TaskType at any time. Optional caller-supplied `TravelComponentSeconds` (ADR 0015). |
 | **TaskPerformance** | Aggregate root: one scored, already-completed task. Immutable once recorded (event-sourced fact from Kafka, no update/delete use case). |
 | **Scorecard** | Read model (NOT a stored aggregate) — projection over `TaskPerformance` rows per associate: task count, mean `EfficiencyPct`, per-`TaskType` breakdown, `trend`, `coachingFlag`. |
 | **TaskTypePerformance** | Fleet-wide (all-associates) read model per TaskType — the "labor monitoring" view, independent of any one associate. |
 | **EfficiencyPct** | `100 * StandardSecondsAtCompletion / ActualSeconds`, nullable, never computed by dividing by zero. |
+| **IdlePeriod** | Aggregate root (`internal/domain/idleness`): one associate's between-task wait, from the previous completion to the next claim (`CompletedAt − ActualSeconds`). Capped at `IDLE_GAP_CAP_SECONDS` (default 3600, `Capped` flag). ADR 0014. |
+| **Utilization** | `1 − idle share` over a trailing window (default 1h), as a nullable percent. An associate's still-running **open gap** is computed at read time and never persisted. |
 
 ## LaborStandard invariants
 
@@ -60,6 +66,9 @@ See ADR 0002, ADR 0003.
   `StandardSecondsAtCompletion` stay historically accurate. Mirrors
   `workforce-management`'s "AssignLabor ends the prior assignment rather
   than rejecting" pattern. See ADR 0004.
+- `TravelComponentSeconds`, when supplied, must satisfy
+  `0 <= t <= ExpectedSeconds`. It is never computed or validated against a
+  live lookup (ADR 0015).
 
 ## TaskPerformance invariants
 
@@ -87,28 +96,35 @@ See ADR 0002, ADR 0003.
 ## Domain events (past tense)
 
 `LaborStandardDefined`, `LaborStandardRevised`, `TaskPerformanceRecorded`.
-Default publisher is a log publisher; `EVENT_PUBLISHER=kafka` fans them
-additionally onto `warehouse.labor-performance.analytics` (the dedicated
-analytics topic feeding `cmd/labor-projector`, ADR 0007), routed through
-the transactional outbox when `DATABASE_URL` is set (ADR 0010). Not
-consumed by any other repo in the fleet today — published for symmetry and
-to leave an integration seam open.
+Default publisher is a log publisher; `EVENT_PUBLISHER=kafka` fans all
+three onto `warehouse.labor-performance.analytics` (the dedicated analytics
+topic feeding `cmd/labor-projector`, ADR 0007), and `TaskPerformanceRecorded`
+also onto the integration topic `warehouse.labor-performance.events`
+(ADR 0013, consumed by `workforce-management`). Both are routed through the
+transactional outbox when `DATABASE_URL` is set (ADR 0010).
+`TaskPerformanceRecorded` carries the additive nullable
+`idle_seconds_before` (ADR 0014).
 
 ## Use cases (application layer)
 
-1. `DefineStandard(taskType, expectedSeconds) -> LaborStandard` — closes
-   any prior active standard for that TaskType, starts a new one.
+1. `DefineStandard(taskType, expectedSeconds, travelComponentSeconds?) ->
+   LaborStandard` — closes any prior active standard for that TaskType,
+   starts a new one.
 2. `GetStandard(taskType) -> LaborStandard | 404`
 3. `RecordTaskPerformance(taskId, associateId, taskType, actualSeconds,
    completedAt, kafkaEventId) -> TaskPerformance` — the Kafka-consumer-
    driven use case, called from the inbound Kafka adapter only, never
-   from HTTP. Idempotent on `kafkaEventId`.
+   from HTTP. Idempotent on `kafkaEventId`. Also derives and saves the
+   associate's `IdlePeriod` in the same unit of work (ADR 0014).
 4. `GetAssociateScorecard(associateId) -> Scorecard | 404` — 404 only when
    this service has NEVER recorded a TaskPerformance row for this
    associate; an associate with 1+ rows but all-nil efficiency returns 200
    with `meanEfficiencyPct: null`.
 5. `GetTaskTypePerformance(taskType) -> TaskTypePerformance` — always 200,
    including a zero-count result for a TaskType never recorded.
+6. `GetUtilization.ForTaskType / ForAssociate(subject, window)` — task time
+   plus idle time over a trailing window (default 1h); `ForAssociate` adds
+   the read-time open gap (ADR 0014).
 
 ## REST API (OLTP, `apis/openapi.yaml`)
 
@@ -118,11 +134,18 @@ to leave an integration seam open.
 | `GET` | `/standards/{taskType}` | GetStandard |
 | `GET` | `/associates/{associateId}/scorecard` | GetAssociateScorecard |
 | `GET` | `/task-types/{taskType}/performance` | GetTaskTypePerformance |
+| `GET` | `/task-types/{taskType}/utilization` | GetUtilization.ForTaskType |
+| `GET` | `/associates/{associateId}/utilization` | GetUtilization.ForAssociate |
 | `GET` | `/healthz` | Liveness probe |
 
 There is deliberately **no** REST endpoint for `RecordTaskPerformance` — it
 is exclusively Kafka-consumer-driven. Every error is RFC 7807
 `application/problem+json`, identical shape across every fleet service.
+
+MCP (`cmd/mcp`): read-only tools `get_associate_scorecard`,
+`get_task_type_performance`, `get_labor_standard`,
+`get_task_type_utilization`; resource template
+`scorecard://labor/{associateId}`; prompt `review_associate_performance`.
 
 ## Inbound Kafka contract (`apis/asyncapi.yaml`, inbound section)
 
@@ -137,23 +160,23 @@ shared across the fleet):
   "source": "fulfillment-execution",
   "data": {
     "task_id": "...", "station_id": "...", "work_unit_id": "...",
-    "associate_id": "...", "duration_seconds": 52
+    "associate_id": "...", "duration_seconds": 52, "task_type": "PICK"
   }
 }
 ```
 
-`associate_id` and `duration_seconds` are OPTIONAL on the wire — an older
-payload predating `fulfillment-execution`'s enrichment omits them, and this
+`associate_id`, `duration_seconds` and `task_type` are OPTIONAL on the
+wire — an older payload predating an enrichment omits them, and this
 service's JSON unmarshaling degrades them to `""`/`0` (the same "no
-occupant"/"unmeasurable" business facts already modeled, not an error).
+occupant"/"unmeasurable"/"unclassified" business facts already modeled,
+not an error).
 
-**Known wire-contract gap:** `fulfillment-execution`'s `TaskCompleted`
-payload does not yet carry a `task_type` field. This service resolves
-`TaskType` as `""` (unclassified) for every consumed event as a result — a
-`""`-typed row is still recorded and counted, but never resolves a
-`LaborStandard` and never appears under `GetTaskTypePerformance` (which
-requires PICK/PACK/SLAM). Reports this as `UNCLASSIFIED` on the analytics
-side (ADR 0007).
+`task_type` is on the wire since `fulfillment-execution` ADR-0023 and goes
+through `shared.ParseTaskTypeLenient`. An unrecognized value (e.g. `REBIN`)
+or an absent field resolves to `""` (unclassified) — still recorded and
+counted, but never resolves a `LaborStandard` and never appears under
+`GetTaskTypePerformance` (which requires PICK/PACK/SLAM). The analytics
+side reports it as `UNCLASSIFIED` (ADR 0007).
 
 ## v1 scope decisions still in force
 
@@ -162,7 +185,8 @@ side (ADR 0007).
   number, a human/other system decides what to do with it.
 - **No gamification or automated coaching workflows.** v1 (ADR 0005) ships
   the passive `Trend`/`CoachingFlag` signal only, a human reads it.
-- **No REST dependency in either direction with any sibling context.**
+- **No outbound REST or MCP dependency on any sibling context.** Siblings
+  may read this context's own surfaces; this context never calls theirs.
 - **No gating/blocking of `fulfillment-execution`** — a below-standard
   associate is still allowed to claim tasks. Visibility, not enforcement.
 
@@ -171,7 +195,9 @@ side (ADR 0007).
 Helm chart, godog/BDD acceptance tests, Postgres integration tests
 (testcontainers), Gremlins mutation-testing gate, arch-go fitness tests,
 Spectral linting (all 3 specs), CodeQL/Scorecard/Trivy, Docker publish +
-release automation, full Docusaurus site, the analytics data product
-(ADR 0007), the transactional outbox (ADR 0010), and (per ADR 0012) the
-REST/MCP auth layer was added then explicitly removed again — see
+release automation, full Docusaurus site, the `labor_mfe` remote (`web/`),
+the analytics data product (ADR 0007), the MCP server (ADR 0009), the
+transactional outbox (ADR 0010), the integration topic (ADR 0013),
+idleness/utilization (ADR 0014), the travel component (ADR 0015), and (per
+ADR 0012) the REST/MCP auth layer was added then explicitly removed again — see
 `.claude/rules/adrs-and-decisions.md`.
