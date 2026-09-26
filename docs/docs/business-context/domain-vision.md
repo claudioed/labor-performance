@@ -89,10 +89,11 @@ README's "Deferred (v1)" section).
 | Context | Owns | Relationship to Labor Performance |
 | --- | --- | --- |
 | `fulfillment-execution` | Task/Station lifecycle | **Supplier** — publishes `TaskCompleted`, this context's only input |
-| `workforce-management` | Shift headcount, path assignment | No relationship — different concepts entirely |
-| **`labor-performance`** | **Standards + scoring** | **Customer** of fulfillment-execution's Open Host Service, via Kafka only |
+| `workforce-management` | Shift headcount, path assignment | **Customer** — consumes this context's `TaskPerformanceRecorded` integration event as a measured-rate and idle-share signal (ADR 0013, ADR 0014); no dependency in the other direction |
+| **`labor-performance`** | **Standards + scoring + utilization** | **Customer** of fulfillment-execution's Open Host Service, via Kafka only |
 
 There is no REST dependency in either direction between this context and its
 one upstream. Everything it needs (`AssociateId`, `TaskType`,
-`DurationSeconds`) already travels on the Kafka event — see the
+`DurationSeconds`) already travels on the Kafka event, and this service
+makes no outbound call to any sibling — see the
 [Context Map](/docs/ecosystem/context-map) for the full wiring.
