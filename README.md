@@ -5,7 +5,7 @@
 > follows real industry-standard patterns and terminology (WMS/WES/WCS,
 > CloudEvents-like envelopes, RFC 7807, hexagonal architecture) but is
 > **not a production system** and is **not affiliated with, endorsed by, or
-> representative of Amazon, Manhattan Associates, Blue Yonder, or any other
+> representative of any real-world
 > company**.
 
 Engineered labor standards ("a PICK should take 45s") and

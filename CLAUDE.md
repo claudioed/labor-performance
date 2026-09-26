@@ -10,7 +10,7 @@ https://claudioed.github.io/labor-performance/
 
 > **Study project.** Educational DDD exercise using real industry patterns
 > and terminology (WMS/WES, CloudEvents-like envelopes, RFC 7807, hexagonal
-> architecture). Not a production system; not affiliated with Amazon,
+> architecture). Not a production system; not affiliated with a major e-commerce retailer,
 > Manhattan Associates, Blue Yonder, or any other company.
 
 ## Non-negotiables (read before writing any code)
