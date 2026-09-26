@@ -1,4 +1,4 @@
-# ADR index (0001–0012)
+# ADR index (0001–0015)
 
 Full records live in `docs/docs/adr/` (Nygard format, Docusaurus-rendered
 at `/docs/adr`). This is a summary index — read the actual ADR before
@@ -18,6 +18,9 @@ relying on a detail not captured here.
 | 0010 | Transactional outbox for the analytics topic | Accepted | Domain event + `processed_events` marker + analytics event commit in one Postgres transaction; an in-process relay drains `outbox_events` onto `warehouse.labor-performance.analytics`. |
 | 0011 | REST identity — fleet-standard static bearer keys with read/read-write scopes | **Superseded by 0012** | Do not re-implement this pattern; it was deliberately removed. |
 | 0012 | Remove the REST/MCP identity layer | Accepted | Current state: no auth layer on REST or MCP. Read this before assuming any endpoint requires a bearer token. |
+| 0013 | Labor performance publishes an integration event | Accepted | `TaskPerformanceRecorded` also goes to the integration topic `warehouse.labor-performance.events` (via the same outbox), consumed by `workforce-management`. The analytics topic stays internal. |
+| 0014 | Measuring idleness and utilization | Accepted | `IdlePeriod` aggregate derived from consecutive `TaskCompleted` events (`IDLE_GAP_CAP_SECONDS`), additive `idle_seconds_before` on `TaskPerformanceRecorded`, the two `/utilization` endpoints and the `get_task_type_utilization` MCP tool. |
+| 0015 | Optional travel-time component on a LaborStandard | Accepted | Caller-supplied `TravelComponentSeconds` (`0 <= t <= ExpectedSeconds`); this service never calls facility-layout or any sibling to compute or validate it. |
 
 ## Reading order for a newcomer
 
@@ -29,6 +32,9 @@ relying on a detail not captured here.
 4. 0009 (MCP) if working on the MCP inbound adapter.
 5. 0011 then 0012 together — 0011 is superseded, but reading it first
    makes 0012's reasoning ("why we undid this") legible.
+6. 0013 → 0014 (the integration topic, then the idleness field it carries)
+   and 0015 (how the no-outbound-call boundary held when facility-layout
+   distance data looked tempting).
 
 ## Proposing a new ADR
 

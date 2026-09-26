@@ -7,8 +7,8 @@ separate `cmd/labor-reports` binary, on its own port, against its own
 read-only analytical database, with its own REST surface. That surface is
 documented in a SEPARATE spec from the OLTP API:
 
-- `apis/openapi.yaml` — the OLTP API (`cmd/labor`, port 8080): 5
-  endpoints, standards + performance reads. Spectral-linted in CI
+- `apis/openapi.yaml` — the OLTP API (`cmd/labor`, port 8080): 6
+  endpoints plus `/healthz` — standards, performance and utilization reads. Spectral-linted in CI
   (`api-lint` job) against `.spectral.yaml`.
 - `apis/openapi-reports.yaml` — the reports API (`cmd/labor-reports`, port
   8092): `GET /reports/performance`, `GET /reports/performance/freshness`,
@@ -44,6 +44,11 @@ Reference" / "Reports API Reference" categories. If you regenerate one
 spec's pages and NOT the other, `sidebars.ts` still needs both directories
 to exist or the Docusaurus build fails at import time.
 
+CI's `docs-api-drift` job runs `npm run clean-api-docs:all && npm run
+gen-api-docs:all` in `docs/` and fails on any `git diff` under
+`docs/api-reference/rest` or `docs/api-reference/rest-reports`. Reproduce
+it locally before pushing a spec change.
+
 **When either `apis/openapi.yaml` or `apis/openapi-reports.yaml` changes:**
 run `npm run gen-api-docs:all` (not just the single-spec script for
 whichever one you touched, unless you're confident the other is already
@@ -60,12 +65,16 @@ wiring in this repo's `docs/` site (the fleet-wide aggregator
 `warehouse-docs` has that tooling; this per-service site does not). The
 AsyncAPI contract is instead described narratively in:
 
-- `docs/docs/overview.md` (the fleet diagram + wire-contract gap note)
-- `docs/docs/ecosystem/context-map.md` (the inbound relationship, full
-  envelope example)
-- `docs/docs/adr/0007-analytical-data-product.md` and
-  `docs/docs/adr/0010-transactional-outbox.md` (the outbound analytics
-  topic)
+- `docs/docs/overview.md` (the fleet diagram)
+- `docs/docs/ecosystem/context-map.md` (the inbound relationship with the
+  full envelope example, and the outbound integration topic)
+- `docs/docs/ddd/subdomain-classification.md` (domain events and where
+  they are published)
+- `docs/docs/adr/0007-analytical-data-product.md`,
+  `docs/docs/adr/0010-transactional-outbox.md`,
+  `docs/docs/adr/0013-labor-performance-integration-events.md` and
+  `docs/docs/adr/0014-labor-utilization-idleness.md` (the outbound topics
+  and the `idle_seconds_before` field)
 - `docs/docs/api-reference/rest-reports/labor-performance-reports-api.info.mdx`
   (references the analytics topic feeding the report)
 
@@ -73,7 +82,7 @@ AsyncAPI contract is instead described narratively in:
 field, a new event type), these narrative pages must be hand-updated —
 there is no generator to catch drift automatically. Grep for the topic
 name (`warehouse.fulfillment.events`, `warehouse.labor-performance.
-analytics`) and the event type names (`TaskCompleted`,
+analytics`, `warehouse.labor-performance.events`) and the event type names (`TaskCompleted`,
 `LaborStandardDefined`, etc.) across `docs/docs/**/*.md*` to find every
 page that would need a matching update.
 

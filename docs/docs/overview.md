@@ -50,6 +50,8 @@ for the full reasoning.
 | **TaskPerformance** | One scored, already-completed task — frozen at ingestion time against whatever standard was active when it finished. |
 | **Scorecard** | A per-associate read model: task count, mean efficiency, per-TaskType breakdown. |
 | **TaskTypePerformance** | A fleet-wide (all-associates) read model per TaskType — the "labor monitoring" view competitors surface independent of any one associate. |
+| **IdlePeriod / Utilization** | The between-task idle gap per associate, derived from consecutive `TaskCompleted` events, and windowed utilization read models per TaskType and per associate ([ADR 0014](/docs/adr/0014-labor-utilization-idleness)). |
+| **Labor Performance Report** | The analytical data product served by `cmd/labor-reports` ([ADR 0007](/docs/adr/0007-analytical-data-product)). |
 
 ## What it deliberately does not own
 
@@ -62,10 +64,11 @@ for the full reasoning.
   below-standard associate is still allowed to claim tasks. This is
   visibility, not enforcement.
 - **does not talk to payroll, HR, or scheduling systems.**
-- **does not call `fulfillment-execution` or `workforce-management`
-  synchronously** — this is a pure Kafka consumer (choreography, not
-  orchestration). See
-  [ADR 0003](/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution).
+- **does not call any sibling context synchronously** — no outbound REST
+  or MCP client exists in this repo. Its only input is a Kafka
+  subscription (choreography, not orchestration). See
+  [ADR 0003](/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution)
+  and [ADR 0015](/docs/adr/0015-optional-travel-component-on-labor-standard).
 
 ## How it fits the fleet
 
@@ -73,8 +76,12 @@ for the full reasoning.
 flowchart LR
   FE["fulfillment-execution<br/>(Core) — Pick/Pack/SLAM"]
   LP["labor-performance<br/>(Supporting)<br/>standards + scoring"]
+  WFM["workforce-management<br/>(Supporting)"]
+  AG["warehouse-ops-agent"]
 
-  FE -- "warehouse.fulfillment.events<br/>TaskCompleted (associate_id, duration_seconds)" --> LP
+  FE -- "warehouse.fulfillment.events<br/>TaskCompleted (associate_id, duration_seconds, task_type)" --> LP
+  LP -- "warehouse.labor-performance.events<br/>TaskPerformanceRecorded" --> WFM
+  AG -. "MCP + reports REST (reads)" .-> LP
 
   classDef core fill:#1e3a8a,stroke:#1e293b,color:#fff;
   classDef this fill:#0f766e,stroke:#134e4a,color:#fff,stroke-width:4px;
@@ -83,10 +90,11 @@ flowchart LR
 ```
 
 This service subscribes to the SAME shared, fan-out topic
-`wes-work-planning` already consumes from — see the
-[Context Map](/docs/ecosystem/context-map) for the full relationship
-analysis, including the known wire-contract gap (`fulfillment-execution`'s
-`TaskCompleted` payload does not carry a `task_type` field today).
+`wes-work-planning` already consumes from, and publishes its own
+integration topic that `workforce-management` consumes. Other contexts
+read it through its own REST, reports and MCP surfaces; it never calls
+them. See the [Context Map](/docs/ecosystem/context-map) for the full
+relationship analysis.
 
 ## Where to go next
 
@@ -94,8 +102,12 @@ analysis, including the known wire-contract gap (`fulfillment-execution`'s
   service exists in this shape.
 - **[Subdomain classification](/docs/ddd/subdomain-classification)** —
   Supporting subdomain, the aggregates and invariants.
-- **[Context map](/docs/ecosystem/context-map)** — the one relationship
-  this service has, and why it's Kafka-only.
+- **[Context map](/docs/ecosystem/context-map)** — every relationship
+  this service has, and why none of them is an outbound call.
 - **[API Reference](/docs/api-reference/rest/labor-performance-api)** — generated from the real,
   Spectral-linted `apis/openapi.yaml`.
+- **[Reports API Reference](/docs/api-reference/rest-reports/labor-performance-reports-api)** —
+  generated from `apis/openapi-reports.yaml`.
+- **[MCP Governance Charter](/docs/mcp/governance-charter)** — the rules the
+  `cmd/mcp` server follows.
 - **[ADRs](/docs/adr)** — the consequential decisions, in Nygard format.

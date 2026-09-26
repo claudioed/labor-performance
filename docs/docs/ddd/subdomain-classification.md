@@ -39,7 +39,9 @@ Classifying a subdomain Supporting (not Core, not Generic) means:
   quality bar.
 - **It is a pure Customer of a Core context's Open Host Service** — it never
   gets write access to `fulfillment-execution`'s Task aggregate, and it
-  never influences that context's decisions (no gating, no blocking).
+  never influences that context's decisions (no gating, no blocking). It
+  is in turn a Supplier to `workforce-management`, which consumes its
+  `TaskPerformanceRecorded` integration event (ADR 0013).
 
 ## Aggregates & invariants
 
@@ -49,6 +51,10 @@ The aggregate root for "how long a task TYPE should take."
 
 - `ExpectedSeconds` must be > 0 — a standard that says a task should take
   zero or negative seconds is not a business fact.
+- An optional, caller-supplied `TravelComponentSeconds` breakdown must be
+  `>= 0` and `<= ExpectedSeconds` when present. This service never
+  computes or validates it against a live distance lookup — see
+  [ADR 0015](/docs/adr/0015-optional-travel-component-on-labor-standard).
 - **Append-only history.** `DefineStandard` for a TaskType that already has
   an active standard does NOT overwrite it in place — it closes the prior
   standard's effective range (`EffectiveTo`) and starts a new one. This
@@ -92,7 +98,25 @@ A projection over `TaskPerformance` rows, per associate: task count, mean
 `EfficiencyPct` across tasks that have one, breakdown by `TaskType`. A 404
 means "this service has never recorded a row for this associate" — distinct
 from "the associate has rows but no numeric score yet" (which is a 200 with
-`meanEfficiencyPct: null`).
+`meanEfficiencyPct: null`). It also carries a `trend`
+(`IMPROVING`/`DECLINING`/`STABLE`/`INSUFFICIENT_DATA`) and a `coachingFlag`
+computed from the associate's most recent (up to 10) scored tasks — see
+[ADR 0005](/docs/adr/0005-associate-trend-and-coaching-flag).
+
+### IdlePeriod
+
+The aggregate root for one associate's between-task wait
+([ADR 0014](/docs/adr/0014-labor-utilization-idleness)), derived when a
+`TaskCompleted` arrives: from the associate's previous completion to this
+task's claim instant (`CompletedAt − ActualSeconds`).
+
+- Rejects an empty `AssociateId` and a non-positive gap. Both are routine
+  on an unordered stream, so the use case skips them rather than failing
+  the enclosing `RecordTaskPerformance`.
+- Capped at `IDLE_GAP_CAP_SECONDS` (default 3600) inside the constructor;
+  a clipped gap is stored with `Capped: true`.
+- A still-running **open gap** (an associate idle right now) is computed
+  at read time only and never persisted.
 
 ## Ubiquitous language
 
@@ -103,10 +127,16 @@ from "the associate has rows but no numeric score yet" (which is a 200 with
 | **Scorecard** | A per-associate read-model projection over TaskPerformance rows. |
 | **TaskType** | PICK, PACK, or SLAM — mirrors `fulfillment-execution`'s `task.Type` enum exactly; no new values invented here. |
 | **EfficiencyPct** | `100 * StandardSecondsAtCompletion / ActualSeconds`, nullable, never computed by dividing by zero. |
+| **Idle Gap** | The between-task wait for one associate (`IdlePeriod`). |
+| **Utilization** | `1 − idle share` over a trailing window, as a percent; `null` when nothing was observed. |
 
 ## Domain events (past tense)
 
-`LaborStandardDefined`, `LaborStandardRevised`, `TaskPerformanceRecorded` —
-published via a log publisher only in v1 (no Kafka publish yet). These are
-not currently consumed by any other service in the fleet; they exist for
-symmetry with the fleet's convention and to leave an integration seam open.
+`LaborStandardDefined`, `LaborStandardRevised`, `TaskPerformanceRecorded`.
+The default publisher only logs them. With `EVENT_PUBLISHER=kafka` all three
+go to `warehouse.labor-performance.analytics`, which feeds this service's
+own analytical projector (ADR 0007). `TaskPerformanceRecorded` also goes to
+the integration topic `warehouse.labor-performance.events` (ADR 0013), which
+`workforce-management` consumes. It carries an additive, nullable
+`idle_seconds_before` field (ADR 0014). With Postgres configured, both
+topics are fed through the transactional outbox (ADR 0010).

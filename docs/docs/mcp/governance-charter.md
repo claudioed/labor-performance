@@ -61,7 +61,8 @@ REST endpoint.** Tools are designed around decisions an agent makes.
 | Prompt name | `snake_case`, names the SOP | `triage_backlog` |
 
 `<context>` is the bounded-context short name (`fulfillment`, `inventory`,
-`work-planning`, `workforce`, `facility`).
+`work-planning`, `workforce`, `facility`, `labor`). This server's one
+resource template is `scorecard://labor/{associateId}`.
 
 ## 4. Tool annotations (mandatory)
 
@@ -91,25 +92,26 @@ interpret a tool result, when to stop and escalate, what "done" means. They are
 user-initiated and carry the least risk, but they standardize agent behaviour
 across clients and **SHOULD** be used rather than leaving procedure implicit.
 
-## 7. Security & authorization (current posture: no IdP)
+## 7. Security & authorization (current posture: unauthenticated)
 
-Per the MCP inbound-adapter ADR, the current posture for these internal,
-non-user-facing servers:
+The static bearer-key layer this section originally mandated (ADR 0009,
+adopted fleet-wide by
+[ADR 0011](../adr/0011-rest-auth-static-bearer-scopes.md)) was **removed**
+by [ADR 0012](../adr/0012-remove-rest-auth-layer.md). The MCP server
+(`cmd/mcp`) currently serves every request without authentication, the same
+as this context's REST surfaces. The rules that still apply:
 
-1. Every request **MUST** be authenticated with a static bearer API key held in
-   a Kubernetes Secret. Missing/invalid key **MUST** return `401`.
-2. Two key classes **MUST** exist: read-only and read-write. A `:write` tool
-   **MUST** reject a read-only key (`403`), audited.
-3. The API key **MUST NEVER** be logged. No secret, token, or key may appear in
-   any log line.
-4. The auth check **MUST** be a middleware behind a stable interface, so the
-   OAuth 2.1 upgrade is a drop-in with no change to tool handlers.
-5. Servers **MUST** remain reachable only in-cluster; ingress **MUST** enforce
-   HTTPS. A server **MUST NOT** be exposed to public/end-user traffic until the
-   OAuth 2.1 resource-server seam is taken (a future ADR).
-6. When a tool must call another service, the server **MUST** authenticate as
-   its own client for that hop and **MUST NOT** pass a client token through
-   (confused-deputy prevention) — applies the day any upstream hop exists.
+1. No secret, token, or key may appear in any log line.
+2. Servers **MUST** remain reachable only in-cluster. A server **MUST NOT**
+   be exposed to public/end-user traffic until an identity layer is
+   reintroduced by a future ADR.
+3. This server exposes read tools only, so the read/write scope split has
+   nothing to separate today. A future write tool needs a new ADR that
+   settles its authorization first.
+4. When a tool must call another service, the server **MUST** authenticate
+   as its own client for that hop and **MUST NOT** pass a client token
+   through (confused-deputy prevention). This applies the day any upstream
+   hop exists; `labor-performance` has none.
 
 ## 8. Guardrails (regardless of auth)
 
@@ -124,9 +126,8 @@ non-user-facing servers:
 
 Every tool call **MUST** emit an audit record with, at minimum:
 
-- `client_id` (which key/caller),
+- `client_id` and `scope` (once an identity layer exists — see §7),
 - `tool` name,
-- `scope` presented,
 - `outcome` (allowed / denied / error),
 - timestamp and trace id.
 
@@ -141,10 +142,11 @@ Jaeger and Grafana alongside HTTP.
    the platform's ≥90% coverage bar, plus at least one transport-level test.
 2. The MCP adapter **MUST** pass `make check` (fmt, vet, build, lint, test) and
    the arch-go fitness tests.
-3. **Phase-6 CI gate (planned):** a workflow that lints tool schemas, enforces
-   the naming conventions and mandatory annotations, and fails a PR that exceeds
-   the tool-count budget without justification — the left-shift equivalent of
-   `make check` for the MCP surface.
+3. **Phase-6 governance gate:** `internal/adapters/inbound/mcp/governance_test.go`
+   boots the real server over an in-process transport and fails the build if
+   the tool count exceeds 8, a tool name breaks the `verb_noun` pattern, or a
+   tool lacks annotations or a description. It is a plain `go test`, so it
+   runs in the existing CI `test` job.
 
 ## 11. Changing this charter
 
